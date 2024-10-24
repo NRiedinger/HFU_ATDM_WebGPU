@@ -1,22 +1,16 @@
-const vertices = new Float32Array([
-  //   X,    Y,
-  -0.8,
-  -0.8, // Triangle 1 (Blue)
-  0.8,
-  -0.8,
-  0.8,
-  0.8,
-
-  -0.8,
-  -0.8, // Triangle 2 (Red)
-  0.8,
-  0.8,
-  -0.8,
-  0.8,
-]);
+const vertices = new Float32Array([-0.8, -0.8, 0.8, -0.8, 0.0, 0.8]);
 
 const canvas = document.querySelector("canvas");
-const GRID_SIZE = 50;
+
+const PARTICLE_COUNT = 10;
+const PARTICLE_SCALE = 0.01;
+const PARTICLE_EXTENT = 100;
+
+const MOVE_SPEED = 1.0;
+const ALIGNMENT_WEIGHT = 0.5;
+const SEPARATION_WEIGHT = 0.5;
+const TARGET_WEIGHT = 0.5;
+
 const WORKGROUP_SIZE = 8;
 const FRAMETIME = 100;
 let step = 0;
@@ -49,25 +43,9 @@ export class Renderer {
       format: canvasFormat,
     });
 
-    const vertices = new Float32Array([
-      //   X,    Y,
-      -0.8,
-      -0.8, // Triangle 1 (Blue)
-      0.8,
-      -0.8,
-      0.8,
-      0.8,
-
-      -0.8,
-      -0.8, // Triangle 2 (Red)
-      0.8,
-      0.8,
-      -0.8,
-      0.8,
-    ]);
-
+    // define vertex buffer
     this.vertexBuffer = this.device.createBuffer({
-      label: "Cell vertices",
+      label: "Particle vertices",
       size: vertices.byteLength,
       usage: GPUBufferUsage.VERTEX | GPUBufferUsage.COPY_DST,
     });
@@ -89,91 +67,80 @@ export class Renderer {
       ],
     };
 
-    const cellShaderModule = this.device.createShaderModule({
-      label: "Cell shader",
+    const particleShaderModule = this.device.createShaderModule({
+      label: "Particle shader",
       code: `
 
 struct VertexInput {
-@location(0) pos: vec2f,
-@builtin(instance_index) instance: u32,
+  @location(0) pos: vec2f,
+  @builtin(instance_index) instance: u32,
 };
 
 struct VertexOutput {
-@builtin(position) pos: vec4f,
-@location(0) cell: vec2f,
+  @builtin(position) pos: vec4f,
 };
 
-@group(0) @binding(0) var<uniform> grid: vec2f;
-@group(0) @binding(1) var<storage> cellState: array<u32>;
+struct ParticleState {
+  position: vec2f,
+  forward: vec2f
+};
+
+@group(0) @binding(0) var<storage> particleStates: array<ParticleState>;
+
+const particleScale = ${PARTICLE_SCALE};
 
 @vertex
 fn vertexMain(input: VertexInput) -> VertexOutput {
 
-let i = f32(input.instance);
-let cell = vec2f(i % grid.x, floor(i / grid.x));
-let state = f32(cellState[input.instance]);
+  let i = f32(input.instance);
+  let state = particleStates[input.instance];
 
-let cellOffset = cell / grid * 2;
-let gridPos = (input.pos * state + 1) / grid - 1 + cellOffset;
+  let pos = (input.pos + state.position) * particleScale;
 
-var output: VertexOutput;
-output.pos = vec4f(gridPos, 0, 1);
-output.cell = cell;
-return output;
+  var output: VertexOutput;
+  output.pos = vec4f(pos, 0, 1);
+  return output;
 }
 
 
-struct FragInput {
-@location(0) cell: vec2f,
-};
-
 @fragment
-fn fragmentMain(input: FragInput) -> @location(0) vec4f {
-let c = input.cell / grid;
-return vec4f(c, 1 - c.x, 1);
+fn fragmentMain() -> @location(0) vec4f {
+  return vec4f(1, 1, 1, 1);
 }
 `,
     });
 
     const bindGroupLayout = this.device.createBindGroupLayout({
-      label: "Cell Bind Group Layout",
+      label: "Particle Bind Group Layout",
       entries: [
         {
           binding: 0,
-          visibility:
-            GPUShaderStage.VERTEX |
-            GPUShaderStage.FRAGMENT |
-            GPUShaderStage.COMPUTE,
-          buffer: {}, // grid uniform buffer
+          visibility: GPUShaderStage.VERTEX | GPUShaderStage.COMPUTE,
+          buffer: { type: "read-only-storage" }, // particle state input buffer
         },
         {
           binding: 1,
-          visibility: GPUShaderStage.VERTEX | GPUShaderStage.COMPUTE,
-          buffer: { type: "read-only-storage" }, // cell state input buffer
-        },
-        {
-          binding: 2,
           visibility: GPUShaderStage.COMPUTE,
-          buffer: { type: "storage" }, // cell state output buffer
+          buffer: { type: "storage" }, // particle state output buffer
         },
       ],
     });
 
     const pipelineLayout = this.device.createPipelineLayout({
-      label: "Cell Pipeline Layout",
+      label: "Particle Pipeline Layout",
       bindGroupLayouts: [bindGroupLayout],
     });
 
-    this.cellPipeline = this.device.createRenderPipeline({
-      label: "Cell pipeline",
+    this.particleRenderPipeline = this.device.createRenderPipeline({
+      label: "Particle render pipeline",
       layout: pipelineLayout,
       vertex: {
-        module: cellShaderModule,
+        module: particleShaderModule,
         entryPoint: "vertexMain",
         buffers: [vertexBufferLayout],
       },
       fragment: {
-        module: cellShaderModule,
+        module: particleShaderModule,
         entryPoint: "fragmentMain",
         targets: [
           {
@@ -183,34 +150,31 @@ return vec4f(c, 1 - c.x, 1);
       },
     });
 
-    // create uniform buffer
-    const uniformArray = new Float32Array([GRID_SIZE, GRID_SIZE]);
-    const uniformBuffer = this.device.createBuffer({
-      label: "Grid Uniforms",
-      size: uniformArray.byteLength,
-      usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST,
-    });
-    this.device.queue.writeBuffer(uniformBuffer, 0, uniformArray);
-
-    // create cell state array
-    const cellStateArray = new Uint32Array(GRID_SIZE * GRID_SIZE);
-    const cellStateStorage = [
+    const particleStateArray = new Float32Array(PARTICLE_COUNT * 4);
+    const particleStateStorage = [
       this.device.createBuffer({
-        label: "Cell state A",
-        size: cellStateArray.byteLength,
+        label: "Particle state A",
+        size: particleStateArray.byteLength,
         usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST,
       }),
       this.device.createBuffer({
-        label: "Cell state B",
-        size: cellStateArray.byteLength,
+        label: "Particle state B",
+        size: particleStateArray.byteLength,
         usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST,
       }),
     ];
 
-    for (let i = 0; i < cellStateArray.length; i++) {
-      cellStateArray[i] = Math.random() > 0.6 ? 1 : 0;
+    for (let i = 0; i < particleStateArray.length; i += 4) {
+      particleStateArray[i] = (Math.random() * 2 - 1) * PARTICLE_EXTENT;
+      particleStateArray[i + 1] = (Math.random() * 2 - 1) * PARTICLE_EXTENT;
+      particleStateArray[i + 2] = 0.0;
+      particleStateArray[i + 3] = 0.0;
     }
-    this.device.queue.writeBuffer(cellStateStorage[0], 0, cellStateArray);
+    this.device.queue.writeBuffer(
+      particleStateStorage[0],
+      0,
+      particleStateArray
+    );
 
     // create bind group
     this.bindGroups = [
@@ -220,15 +184,11 @@ return vec4f(c, 1 - c.x, 1);
         entries: [
           {
             binding: 0,
-            resource: { buffer: uniformBuffer },
+            resource: { buffer: particleStateStorage[0] },
           },
           {
             binding: 1,
-            resource: { buffer: cellStateStorage[0] },
-          },
-          {
-            binding: 2,
-            resource: { buffer: cellStateStorage[1] },
+            resource: { buffer: particleStateStorage[1] },
           },
         ],
       }),
@@ -238,61 +198,67 @@ return vec4f(c, 1 - c.x, 1);
         entries: [
           {
             binding: 0,
-            resource: { buffer: uniformBuffer },
+            resource: { buffer: particleStateStorage[1] },
           },
           {
             binding: 1,
-            resource: { buffer: cellStateStorage[1] },
-          },
-          {
-            binding: 2,
-            resource: { buffer: cellStateStorage[0] },
+            resource: { buffer: particleStateStorage[0] },
           },
         ],
       }),
     ];
 
     const simulationShaderModule = this.device.createShaderModule({
-      label: "Game of Life simulation shader",
+      label: "compute shader",
       code: `
-@group(0) @binding(0) var<uniform> grid: vec2f;
+struct ParticleState {
+  position: vec2f,
+  forward: vec2f
+};
 
-@group(0) @binding(1) var<storage> cellStateIn: array<u32>;
-@group(0) @binding(2) var<storage, read_write> cellStateOut: array<u32>; 
+@group(0) @binding(0) var<storage> particleStatesIn: array<ParticleState>;
+@group(0) @binding(1) var<storage, read_write> particleStatesOut: array<ParticleState>; 
 
-fn cellIndex(cell: vec2u) -> u32 {
-return (cell.y % u32(grid.y)) * u32(grid.x) + (cell.x % u32(grid.x));
-}
+const numParticles = ${PARTICLE_COUNT};
+const alignmentWeight = ${ALIGNMENT_WEIGHT};
+const separationWeight = ${SEPARATION_WEIGHT};
+const targetWeight = ${TARGET_WEIGHT};
+const targetPosition = vec2f(0);
+const moveSpeed = ${MOVE_SPEED};
 
-fn cellActive(x: u32, y: u32) -> u32 {
-return cellStateIn[cellIndex(vec2(x, y))];
+fn normalizeSafe(v: vec2f) -> vec2f {
+  if(length(v) > 0) {
+    return normalize(v);
+  }
+  return vec2f(0);
 }
 
 @compute
 @workgroup_size(${WORKGROUP_SIZE}, ${WORKGROUP_SIZE})
-fn computeMain(@builtin(global_invocation_id) cell: vec3u) {
-let activeNeighbors = cellActive(cell.x+1, cell.y+1) +
-                      cellActive(cell.x+1, cell.y) +
-                      cellActive(cell.x+1, cell.y-1) +
-                      cellActive(cell.x, cell.y-1) +
-                      cellActive(cell.x-1, cell.y-1) +
-                      cellActive(cell.x-1, cell.y) +
-                      cellActive(cell.x-1, cell.y+1) +
-                      cellActive(cell.x, cell.y+1);
+fn computeMain(@builtin(global_invocation_id) id: vec3u) {
 
-let i = cellIndex(cell.xy);
+  let particleIndex = id.x;
+  let stateSelf = particleStatesIn[particleIndex];
+  var cellAlignment: vec2f;
+  var cellSeparation: vec2f;
 
-switch activeNeighbors {
-  case 2: {
-    cellStateOut[i] = cellStateIn[i];
+  for(var i = 0; i < numParticles; i++) {
+    let stateSelf = particleStatesIn[i];
+    cellAlignment += stateSelf.forward;
+    cellSeparation += stateSelf.position;
   }
-  case 3: {
-    cellStateOut[i] = 1;
-  }
-  default: {
-    cellStateOut[i] = 0;
-  }
-}
+
+  let alignmentResult = alignmentWeight * normalizeSafe((cellAlignment / numParticles) - stateSelf.forward);
+  let separationResult = separationWeight * normalizeSafe((stateSelf.position / numParticles) - cellSeparation);
+  let targetHeading = targetWeight * normalizeSafe(targetPosition - stateSelf.position);
+
+  let normalHeading = normalizeSafe(alignmentResult + separationResult + targetHeading);
+  let nextHeading = normalizeSafe(stateSelf.forward + /*deltaTime * */ (normalHeading - stateSelf.forward));
+
+  var stateResult: ParticleState;
+  stateResult.position = stateSelf.position + (nextHeading * moveSpeed /* * deltaTime*/);
+  stateResult.forward = nextHeading;
+  particleStatesOut[particleIndex] = stateResult;
 }
       `,
     });
@@ -320,7 +286,7 @@ switch activeNeighbors {
       computePass.setPipeline(this.simulationPipeline);
       computePass.setBindGroup(0, this.bindGroups[step % 2]);
 
-      const workgroupCount = Math.ceil(GRID_SIZE / WORKGROUP_SIZE);
+      const workgroupCount = Math.ceil(PARTICLE_COUNT / WORKGROUP_SIZE);
       computePass.dispatchWorkgroups(workgroupCount, workgroupCount);
 
       computePass.end();
@@ -338,10 +304,10 @@ switch activeNeighbors {
         ],
       });
 
-      pass.setPipeline(this.cellPipeline);
+      pass.setPipeline(this.particleRenderPipeline);
       pass.setVertexBuffer(0, this.vertexBuffer);
       pass.setBindGroup(0, this.bindGroups[step % 2]);
-      pass.draw(vertices.length / 2, GRID_SIZE * GRID_SIZE);
+      pass.draw(vertices.length / 2, PARTICLE_COUNT);
 
       pass.end();
 
