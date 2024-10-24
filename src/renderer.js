@@ -2,9 +2,8 @@ const vertices = new Float32Array([-0.8, -0.8, 0.8, -0.8, 0.0, 0.8]);
 
 const canvas = document.querySelector("canvas");
 
-const PARTICLE_COUNT = 10;
-const PARTICLE_SCALE = 0.01;
-const PARTICLE_EXTENT = 100;
+const PARTICLE_COUNT = 100;
+const PARTICLE_EXTENT = 100.0;
 
 const MOVE_SPEED = 1.0;
 const ALIGNMENT_WEIGHT = 0.5;
@@ -12,7 +11,8 @@ const SEPARATION_WEIGHT = 0.5;
 const TARGET_WEIGHT = 0.5;
 
 const WORKGROUP_SIZE = 8;
-const FRAMETIME = 100;
+const FRAMERATE = 60;
+const FRAMETIME = 1000 / FRAMERATE;
 let step = 0;
 
 export class Renderer {
@@ -87,7 +87,7 @@ struct ParticleState {
 
 @group(0) @binding(0) var<storage> particleStates: array<ParticleState>;
 
-const particleScale = ${PARTICLE_SCALE};
+const particleExtent = ${PARTICLE_EXTENT};
 
 @vertex
 fn vertexMain(input: VertexInput) -> VertexOutput {
@@ -95,7 +95,7 @@ fn vertexMain(input: VertexInput) -> VertexOutput {
   let i = f32(input.instance);
   let state = particleStates[input.instance];
 
-  let pos = (input.pos + state.position) * particleScale;
+  let pos = (input.pos + state.position) / particleExtent;
 
   var output: VertexOutput;
   output.pos = vec4f(pos, 0, 1);
@@ -123,6 +123,14 @@ fn fragmentMain() -> @location(0) vec4f {
           visibility: GPUShaderStage.COMPUTE,
           buffer: { type: "storage" }, // particle state output buffer
         },
+        {
+          binding: 2,
+          visibility:
+            GPUShaderStage.VERTEX |
+            GPUShaderStage.FRAGMENT |
+            GPUShaderStage.COMPUTE,
+          buffer: {}, // grid uniform buffer
+        },
       ],
     });
 
@@ -149,6 +157,15 @@ fn fragmentMain() -> @location(0) vec4f {
         ],
       },
     });
+
+    // uniform buffer
+    const uniformBufferSize = 1 * 4;
+    this.uniformValues = new Float32Array(uniformBufferSize / 4);
+    this.uniformBuffer = this.device.createBuffer({
+      size: uniformBufferSize,
+      usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST,
+    });
+    this.device.queue.writeBuffer(this.uniformBuffer, 0, this.uniformValues);
 
     const particleStateArray = new Float32Array(PARTICLE_COUNT * 4);
     const particleStateStorage = [
@@ -190,6 +207,10 @@ fn fragmentMain() -> @location(0) vec4f {
             binding: 1,
             resource: { buffer: particleStateStorage[1] },
           },
+          {
+            binding: 2,
+            resource: { buffer: this.uniformBuffer },
+          },
         ],
       }),
       this.device.createBindGroup({
@@ -203,6 +224,10 @@ fn fragmentMain() -> @location(0) vec4f {
           {
             binding: 1,
             resource: { buffer: particleStateStorage[0] },
+          },
+          {
+            binding: 2,
+            resource: { buffer: this.uniformBuffer },
           },
         ],
       }),
@@ -218,6 +243,8 @@ struct ParticleState {
 
 @group(0) @binding(0) var<storage> particleStatesIn: array<ParticleState>;
 @group(0) @binding(1) var<storage, read_write> particleStatesOut: array<ParticleState>; 
+
+@group(0) @binding(2) var<uniform> deltaTime: f32;
 
 const numParticles = ${PARTICLE_COUNT};
 const alignmentWeight = ${ALIGNMENT_WEIGHT};
@@ -253,10 +280,10 @@ fn computeMain(@builtin(global_invocation_id) id: vec3u) {
   let targetHeading = targetWeight * normalizeSafe(targetPosition - stateSelf.position);
 
   let normalHeading = normalizeSafe(alignmentResult + separationResult + targetHeading);
-  let nextHeading = normalizeSafe(stateSelf.forward + /*deltaTime * */ (normalHeading - stateSelf.forward));
+  let nextHeading = normalizeSafe(stateSelf.forward + deltaTime * (normalHeading - stateSelf.forward));
 
   var stateResult: ParticleState;
-  stateResult.position = stateSelf.position + (nextHeading * moveSpeed /* * deltaTime*/);
+  stateResult.position = stateSelf.position + (nextHeading * moveSpeed * deltaTime);
   stateResult.forward = nextHeading;
   particleStatesOut[particleIndex] = stateResult;
 }
@@ -280,6 +307,9 @@ fn computeMain(@builtin(global_invocation_id) id: vec3u) {
     if (deltaTime > FRAMETIME) {
       this.lastAnimationTime = currentAnimationTime - (deltaTime % FRAMETIME);
 
+      this.uniformValues.set([deltaTime], 0);
+      this.device.queue.writeBuffer(this.uniformBuffer, 0, this.uniformValues);
+
       const encoder = this.device.createCommandEncoder();
 
       const computePass = encoder.beginComputePass();
@@ -290,8 +320,6 @@ fn computeMain(@builtin(global_invocation_id) id: vec3u) {
       computePass.dispatchWorkgroups(workgroupCount, workgroupCount);
 
       computePass.end();
-
-      step++;
 
       const pass = encoder.beginRenderPass({
         colorAttachments: [
@@ -313,6 +341,8 @@ fn computeMain(@builtin(global_invocation_id) id: vec3u) {
 
       // Finish the command buffer and immediately submit it.
       this.device.queue.submit([encoder.finish()]);
+
+      step++;
     }
 
     requestAnimationFrame(this.frame.bind(this));
