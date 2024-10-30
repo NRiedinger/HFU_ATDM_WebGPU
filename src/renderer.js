@@ -2,7 +2,7 @@ const vertices = new Float32Array([-0.8, -0.8, 0.8, -0.8, 0.0, 0.8]);
 
 const canvas = document.querySelector("canvas");
 
-const PARTICLE_COUNT = 100;
+const PARTICLE_COUNT = 32;
 const PARTICLE_EXTENT = 100.0;
 
 const MOVE_SPEED = 1.0;
@@ -13,6 +13,7 @@ const TARGET_WEIGHT = 0.5;
 const WORKGROUP_SIZE = 8;
 const FRAMERATE = 60;
 const FRAMETIME = 1000 / FRAMERATE;
+const TIMESCALE = 0.02;
 
 export class Renderer {
   constructor() {
@@ -243,7 +244,8 @@ fn normalizeSafe(v: vec2f) -> vec2f {
 }
 
 @compute
-@workgroup_size(${WORKGROUP_SIZE}, ${WORKGROUP_SIZE})
+//@workgroup_size(${WORKGROUP_SIZE}, ${WORKGROUP_SIZE})
+@workgroup_size(${WORKGROUP_SIZE}, 1, 1)
 fn computeMain(@builtin(global_invocation_id) id: vec3u) {
 
   let particleIndex = id.x;
@@ -252,9 +254,13 @@ fn computeMain(@builtin(global_invocation_id) id: vec3u) {
   var cellSeparation: vec2f;
 
   for(var i = 0; i < numParticles; i++) {
-    let stateSelf = particleStates[i];
-    cellAlignment += stateSelf.forward;
-    cellSeparation += stateSelf.position;
+    if (i == i32(particleIndex)) {
+      continue;
+    }
+
+    let stateOther = particleStates[i];
+    cellAlignment += stateOther.forward;
+    cellSeparation += stateOther.position;
   }
 
   let alignmentResult = alignmentWeight * normalizeSafe((cellAlignment / numParticles) - stateSelf.forward);
@@ -262,13 +268,13 @@ fn computeMain(@builtin(global_invocation_id) id: vec3u) {
   let targetHeading = targetWeight * normalizeSafe(targetPosition - stateSelf.position);
 
   let normalHeading = normalizeSafe(alignmentResult + separationResult + targetHeading);
-  // let nextHeading = normalizeSafe(stateSelf.forward + deltaTime * (normalHeading - stateSelf.forward));
-  let nextHeading = normalizeSafe(stateSelf.forward + (normalHeading - stateSelf.forward));
+  let nextHeading = normalizeSafe(stateSelf.forward + deltaTime * ${TIMESCALE} * (normalHeading - stateSelf.forward));
+  // let nextHeading = normalizeSafe(stateSelf.forward + (normalHeading - stateSelf.forward));
 
 
   var stateResult: ParticleState;
-  // stateResult.position = stateSelf.position + (nextHeading * moveSpeed * deltaTime);
-  stateResult.position = stateSelf.position + (nextHeading * moveSpeed);
+  stateResult.position = stateSelf.position + (nextHeading * moveSpeed * deltaTime * ${TIMESCALE});
+  // stateResult.position = stateSelf.position + (nextHeading * moveSpeed);
   stateResult.forward = nextHeading;
   particleStates[particleIndex] = stateResult;
 }
@@ -302,7 +308,11 @@ fn computeMain(@builtin(global_invocation_id) id: vec3u) {
       computePass.setBindGroup(0, this.bindGroup);
 
       const workgroupCount = Math.ceil(PARTICLE_COUNT / WORKGROUP_SIZE);
-      computePass.dispatchWorkgroups(workgroupCount, workgroupCount);
+      computePass.dispatchWorkgroups(
+        Math.ceil(PARTICLE_COUNT / WORKGROUP_SIZE),
+        1,
+        1
+      );
 
       computePass.end();
 
