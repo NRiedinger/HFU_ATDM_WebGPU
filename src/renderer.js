@@ -15,6 +15,8 @@ const FRAMERATE = 60;
 const FRAMETIME = 1000 / FRAMERATE;
 const TIMESCALE = 0.02;
 
+let step = 0;
+
 export class Renderer {
   constructor() {
     this.setup().then(() => {
@@ -85,7 +87,7 @@ struct ParticleState {
   forward: vec2f
 };
 
-@group(0) @binding(1) var<storage> particleStates: array<ParticleState>;
+@group(0) @binding(0) var<storage> particleStates: array<ParticleState>;
 
 const particleExtent = ${PARTICLE_EXTENT};
 
@@ -115,13 +117,13 @@ fn fragmentMain() -> @location(0) vec4f {
       entries: [
         {
           binding: 0,
-          visibility: GPUShaderStage.COMPUTE,
-          buffer: { type: "storage" }, // particle state buffer for compute shader
+          visibility: GPUShaderStage.VERTEX | GPUShaderStage.COMPUTE,
+          buffer: { type: "read-only-storage" }, // particle state input buffer
         },
         {
           binding: 1,
-          visibility: GPUShaderStage.VERTEX,
-          buffer: { type: "read-only-storage" }, // particle state buffer for vertex shader
+          visibility: GPUShaderStage.COMPUTE,
+          buffer: { type: "storage" }, // particle state output buffer
         },
         {
           binding: 2,
@@ -168,20 +170,18 @@ fn fragmentMain() -> @location(0) vec4f {
     this.device.queue.writeBuffer(this.uniformBuffer, 0, this.uniformValues);
 
     this.particleStateArray = new Float32Array(PARTICLE_COUNT * 4);
-    this.particleStateComputeBuffer = this.device.createBuffer({
-      label: "Particle state compute",
-      size: this.particleStateArray.byteLength,
-      usage:
-        GPUBufferUsage.STORAGE |
-        GPUBufferUsage.COPY_DST |
-        GPUBufferUsage.COPY_SRC,
-    });
-
-    this.particleStateVertexBuffer = this.device.createBuffer({
-      label: "Particle state vertex",
-      size: this.particleStateArray.byteLength,
-      usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST,
-    });
+    this.particleStateStorage = [
+      this.device.createBuffer({
+        label: "Particle state A",
+        size: this.particleStateArray.byteLength,
+        usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST,
+      }),
+      this.device.createBuffer({
+        label: "Particle state B",
+        size: this.particleStateArray.byteLength,
+        usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST,
+      }),
+    ];
 
     for (let i = 0; i < this.particleStateArray.length; i += 4) {
       this.particleStateArray[i] = (Math.random() * 2 - 1) * PARTICLE_EXTENT;
@@ -191,30 +191,50 @@ fn fragmentMain() -> @location(0) vec4f {
       this.particleStateArray[i + 3] = 0.0;
     }
     this.device.queue.writeBuffer(
-      this.particleStateComputeBuffer,
+      this.particleStateStorage[0],
       0,
       this.particleStateArray
     );
 
     // create bind group
-    this.bindGroup = this.device.createBindGroup({
-      label: "Cell renderer bind group A",
-      layout: bindGroupLayout,
-      entries: [
-        {
-          binding: 0,
-          resource: { buffer: this.particleStateComputeBuffer },
-        },
-        {
-          binding: 1,
-          resource: { buffer: this.particleStateVertexBuffer },
-        },
-        {
-          binding: 2,
-          resource: { buffer: this.uniformBuffer },
-        },
-      ],
-    });
+    this.bindGroups = [
+      this.device.createBindGroup({
+        label: "Cell renderer bind group A",
+        layout: bindGroupLayout,
+        entries: [
+          {
+            binding: 0,
+            resource: { buffer: this.particleStateStorage[0] },
+          },
+          {
+            binding: 1,
+            resource: { buffer: this.particleStateStorage[1]},
+          },
+          {
+            binding: 2,
+            resource: { buffer: this.uniformBuffer },
+          },
+        ],
+      }),
+      this.device.createBindGroup({
+        label: "Cell renderer bind group B",
+        layout: bindGroupLayout,
+        entries: [
+          {
+            binding: 0,
+            resource: { buffer: this.particleStateStorage[1] },
+          },
+          {
+            binding: 1,
+            resource: { buffer: this.particleStateStorage[0] },
+          },
+          {
+            binding: 2,
+            resource: { buffer: this.uniformBuffer },
+          },
+        ],
+      }),
+    ];
 
     const simulationShaderModule = this.device.createShaderModule({
       label: "compute shader",
@@ -224,8 +244,8 @@ struct ParticleState {
   forward: vec2f
 };
 
-// @group(0) @binding(1) var<storage> particleStatesIn: array<ParticleState>;
-@group(0) @binding(0) var<storage, read_write> particleStates: array<ParticleState>; 
+@group(0) @binding(0) var<storage> particleStatesIn: array<ParticleState>;
+@group(0) @binding(1) var<storage, read_write> particleStatesOut: array<ParticleState>; 
 
 @group(0) @binding(2) var<uniform> deltaTime: f32;
 
@@ -244,12 +264,11 @@ fn normalizeSafe(v: vec2f) -> vec2f {
 }
 
 @compute
-//@workgroup_size(${WORKGROUP_SIZE}, ${WORKGROUP_SIZE})
 @workgroup_size(${WORKGROUP_SIZE}, 1, 1)
 fn computeMain(@builtin(global_invocation_id) id: vec3u) {
 
   let particleIndex = id.x;
-  let stateSelf = particleStates[particleIndex];
+  let stateSelf = particleStatesIn[particleIndex];
   var cellAlignment: vec2f;
   var cellSeparation: vec2f;
 
@@ -258,7 +277,7 @@ fn computeMain(@builtin(global_invocation_id) id: vec3u) {
       continue;
     }
 
-    let stateOther = particleStates[i];
+    let stateOther = particleStatesIn[i];
     cellAlignment += stateOther.forward;
     cellSeparation += stateOther.position;
   }
@@ -276,7 +295,7 @@ fn computeMain(@builtin(global_invocation_id) id: vec3u) {
   stateResult.position = stateSelf.position + (nextHeading * moveSpeed * deltaTime * ${TIMESCALE});
   // stateResult.position = stateSelf.position + (nextHeading * moveSpeed);
   stateResult.forward = nextHeading;
-  particleStates[particleIndex] = stateResult;
+  particleStatesOut[particleIndex] = stateResult;
 }
       `,
     });
@@ -305,7 +324,7 @@ fn computeMain(@builtin(global_invocation_id) id: vec3u) {
 
       const computePass = encoder.beginComputePass();
       computePass.setPipeline(this.simulationPipeline);
-      computePass.setBindGroup(0, this.bindGroup);
+      computePass.setBindGroup(0, this.bindGroups[step % 2]);
 
       const workgroupCount = Math.ceil(PARTICLE_COUNT / WORKGROUP_SIZE);
       computePass.dispatchWorkgroups(
@@ -315,15 +334,6 @@ fn computeMain(@builtin(global_invocation_id) id: vec3u) {
       );
 
       computePass.end();
-
-      // copy compute result to buffer usable by vertex shader
-      encoder.copyBufferToBuffer(
-        this.particleStateComputeBuffer,
-        0,
-        this.particleStateVertexBuffer,
-        0,
-        this.particleStateArray.byteLength
-      );
 
       const pass = encoder.beginRenderPass({
         colorAttachments: [
@@ -338,13 +348,15 @@ fn computeMain(@builtin(global_invocation_id) id: vec3u) {
 
       pass.setPipeline(this.particleRenderPipeline);
       pass.setVertexBuffer(0, this.vertexBuffer);
-      pass.setBindGroup(0, this.bindGroup);
+      pass.setBindGroup(0, this.bindGroups[step % 2]);
       pass.draw(vertices.length / 2, PARTICLE_COUNT);
 
       pass.end();
 
       // Finish the command buffer and immediately submit it.
       this.device.queue.submit([encoder.finish()]);
+
+      step++;
     }
 
     requestAnimationFrame(this.frame.bind(this));
