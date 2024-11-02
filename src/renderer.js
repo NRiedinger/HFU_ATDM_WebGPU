@@ -1,25 +1,19 @@
 import { particleShaderCode } from "./particleShader.js";
 import { computeShaderCode } from "./computeShader.js";
 
-const vertices = new Float32Array([-0.8, -0.8, 0.8, -0.8, 0.0, 0.8]);
+const vertices = new Float32Array([-0.01, -0.02, 0.01, -0.02, 0.0, 0.02]);
 
 const canvas = document.querySelector("canvas");
 
-const PARTICLE_COUNT = 32;
-const PARTICLE_EXTENT = 100.0;
-
-const MOVE_SPEED = 1.0;
-const ALIGNMENT_WEIGHT = 0.5;
-const SEPARATION_WEIGHT = 0.5;
-const TARGET_WEIGHT = 0.5;
-
-const WORKGROUP_SIZE = 8;
-const FRAMERATE = 60;
-const FRAMETIME = 1000 / FRAMERATE;
-
+const PARTICLE_COUNT = 1500;
 const parameters = {
-  deltaTime: 0.0,
-  timeScale: 0.02,
+  deltaTime: 0.04,
+  r1d: 0.1,
+  r2d: 0.025,
+  r3d: 0.025,
+  r1s: 0.02,
+  r2s: 0.05,
+  r3s: 0.005,
 };
 
 let step = 0;
@@ -28,7 +22,6 @@ export class Renderer {
   constructor() {
     this.setup().then(() => {
       // start animation
-      this.lastAnimationTime = Date.now();
       requestAnimationFrame(this.frame.bind(this));
     });
   }
@@ -130,10 +123,16 @@ export class Renderer {
     });
 
     // uniform buffer
-    const uniformBufferSize = 2 * Float32Array.BYTES_PER_ELEMENT;
+    const uniformBufferSize =
+      Object.keys(parameters).length * Float32Array.BYTES_PER_ELEMENT;
     this.uniformValues = new Float32Array([
       parameters.deltaTime,
-      parameters.timeScale,
+      parameters.r1d,
+      parameters.r2d,
+      parameters.r3d,
+      parameters.r1s,
+      parameters.r2s,
+      parameters.r3s,
     ]);
     this.uniformBuffer = this.device.createBuffer({
       size: uniformBufferSize,
@@ -156,11 +155,10 @@ export class Renderer {
     ];
 
     for (let i = 0; i < this.particleStateArray.length; i += 4) {
-      this.particleStateArray[i] = (Math.random() * 2 - 1) * PARTICLE_EXTENT;
-      this.particleStateArray[i + 1] =
-        (Math.random() * 2 - 1) * PARTICLE_EXTENT;
-      this.particleStateArray[i + 2] = 0.0;
-      this.particleStateArray[i + 3] = 0.0;
+      this.particleStateArray[i] = 2 * (Math.random() - 0.5);
+      this.particleStateArray[i + 1] = 2 * (Math.random() - 0.5);
+      this.particleStateArray[i + 2] = 2 * (Math.random() - 0.5) * 0.1;
+      this.particleStateArray[i + 3] = 2 * (Math.random() - 0.5) * 0.1;
     }
     this.device.queue.writeBuffer(
       this.particleStateStorage[0],
@@ -224,53 +222,43 @@ export class Renderer {
   }
 
   frame() {
-    const currentAnimationTime = Date.now();
-    const deltaTime = currentAnimationTime - this.lastAnimationTime;
 
-    if (deltaTime > FRAMETIME) {
-      this.lastAnimationTime = currentAnimationTime - (deltaTime % FRAMETIME);
+    const encoder = this.device.createCommandEncoder();
 
-      this.uniformValues.set([deltaTime], 0);
-      this.device.queue.writeBuffer(this.uniformBuffer, 0, this.uniformValues);
+    const computePass = encoder.beginComputePass();
+    computePass.setPipeline(this.simulationPipeline);
+    computePass.setBindGroup(0, this.bindGroups[step % 2]);
 
-      const encoder = this.device.createCommandEncoder();
+    computePass.dispatchWorkgroups(
+      Math.ceil(PARTICLE_COUNT / 64),
+      1,
+      1
+    );
 
-      const computePass = encoder.beginComputePass();
-      computePass.setPipeline(this.simulationPipeline);
-      computePass.setBindGroup(0, this.bindGroups[step % 2]);
+    computePass.end();
 
-      const workgroupCount = Math.ceil(PARTICLE_COUNT / WORKGROUP_SIZE);
-      computePass.dispatchWorkgroups(
-        Math.ceil(PARTICLE_COUNT / WORKGROUP_SIZE),
-        1,
-        1
-      );
+    const pass = encoder.beginRenderPass({
+      colorAttachments: [
+        {
+          view: this.context.getCurrentTexture().createView(),
+          loadOp: "clear",
+          clearValue: { r: 0.02, g: 0.02, b: 0.02, a: 1 },
+          storeOp: "store",
+        },
+      ],
+    });
 
-      computePass.end();
+    pass.setPipeline(this.particleRenderPipeline);
+    pass.setVertexBuffer(0, this.vertexBuffer);
+    pass.setBindGroup(0, this.bindGroups[step % 2]);
+    pass.draw(vertices.length / 2, PARTICLE_COUNT);
 
-      const pass = encoder.beginRenderPass({
-        colorAttachments: [
-          {
-            view: this.context.getCurrentTexture().createView(),
-            loadOp: "clear",
-            clearValue: { r: 0.02, g: 0.02, b: 0.02, a: 1 },
-            storeOp: "store",
-          },
-        ],
-      });
+    pass.end();
 
-      pass.setPipeline(this.particleRenderPipeline);
-      pass.setVertexBuffer(0, this.vertexBuffer);
-      pass.setBindGroup(0, this.bindGroups[step % 2]);
-      pass.draw(vertices.length / 2, PARTICLE_COUNT);
+    // Finish the command buffer and immediately submit it.
+    this.device.queue.submit([encoder.finish()]);
 
-      pass.end();
-
-      // Finish the command buffer and immediately submit it.
-      this.device.queue.submit([encoder.finish()]);
-
-      step++;
-    }
+    step++;
 
     requestAnimationFrame(this.frame.bind(this));
   }

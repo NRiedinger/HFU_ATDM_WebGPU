@@ -10,20 +10,17 @@ struct VertexOutput {
 
 struct ParticleState {
   position: vec2f,
-  forward: vec2f
+  velocity: vec2f
 };
 
 @group(0) @binding(0) var<storage> particleStates: array<ParticleState>;
 
-const particleExtent = 100.0;
 
 @vertex
 fn vertexMain(input: VertexInput) -> VertexOutput {
-
-  let i = f32(input.instance);
   let state = particleStates[input.instance];
 
-  let angle = -atan2(state.forward.x, state.forward.y);
+  let angle = -atan2(state.velocity.x, state.velocity.y);
   
   let pos = vec2f(
     (input.pos.x * cos(angle)) - (input.pos.y * sin(angle)),
@@ -31,7 +28,7 @@ fn vertexMain(input: VertexInput) -> VertexOutput {
   );
 
   var output: VertexOutput;
-  output.pos = vec4f((input.pos + state.position) / particleExtent, 0, 1);
+  output.pos = vec4f((pos + state.position), 0, 1);
   return output;
 }
 

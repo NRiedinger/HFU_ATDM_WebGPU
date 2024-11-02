@@ -1,12 +1,17 @@
 export const computeShaderCode = `
 struct ParticleState {
   position: vec2f,
-  forward: vec2f
+  velocity: vec2f
 };
 
 struct UniformParameter {
   deltaTime: f32,
-  timeScale: f32
+  r1d: f32,
+  r2d: f32,
+  r3d: f32,
+  r1s: f32,
+  r2s: f32,
+  r3s: f32,
 };
 
 @group(0) @binding(0) var<storage> particleStatesIn: array<ParticleState>;
@@ -14,52 +19,84 @@ struct UniformParameter {
 
 @group(0) @binding(2) var<uniform> params: UniformParameter;
 
-const alignmentWeight = 0.5;
-const separationWeight = 0.5;
-const targetWeight = 0.5;
-const targetPosition = vec2f(0);
-const moveSpeed = 1.0;
 
-fn normalizeSafe(v: vec2f) -> vec2f {
-  if(length(v) > 0) {
-    return normalize(v);
-  }
-  return vec2f(0);
-}
 
 @compute
-@workgroup_size(8, 1, 1)
+@workgroup_size(64, 1, 1)
 fn computeMain(@builtin(global_invocation_id) id: vec3u) {
+  let index = id.x;
 
-  let particleIndex = id.x;
-  let stateSelf = particleStatesIn[particleIndex];
-  let numParticles = arrayLength(&particleStatesIn);
-  var cellAlignment: vec2f;
-  var cellSeparation: vec2f;
+  var vPos = particleStatesIn[index].position;
+  var vVel = particleStatesIn[index].velocity;
+  var cMass = vec2(0.0);
+  var cVel = vec2(0.0);
+  var colVel = vec2(0.0);
+  var cMassCount = 0u;
+  var cVelCount = 0u;
+  var pos: vec2f;
+  var vel: vec2f;
 
-  for(var i = 0u; i < numParticles; i++) {
-    if (i == particleIndex) {
+  for(var i = 0u; i < arrayLength(&particleStatesIn); i++) {
+    if(i == index) {
       continue;
     }
 
-    let stateOther = particleStatesIn[i];
-    cellAlignment += stateOther.forward;
-    cellSeparation += stateOther.position;
+    pos = particleStatesIn[i].position;
+    vel = particleStatesIn[i].velocity;
+
+    if(distance(pos, vPos) < params.r1d) {
+      cMass += pos;
+      cMassCount++;
+    }
+
+    if(distance(pos, vPos) < params.r2d) {
+      colVel -= pos - vPos;
+    }
+
+    if(distance(pos, vPos) < params.r3d) {
+      cVel += vel;
+      cVelCount++;
+    }
+  }
+  
+  if(cMassCount > 0) {
+    cMass = (cMass / vec2(f32(cMassCount))) - vPos;
   }
 
-  let alignmentResult = alignmentWeight * normalizeSafe((cellAlignment / f32(numParticles)) - stateSelf.forward);
-  let separationResult = separationWeight * normalizeSafe((stateSelf.position / f32(numParticles)) - cellSeparation);
-  let targetHeading = targetWeight * normalizeSafe(targetPosition - stateSelf.position);
+  if(cVelCount > 0) {
+    cVel /= f32(cVelCount);
+  }
 
-  let normalHeading = normalizeSafe(alignmentResult + separationResult + targetHeading);
-  let nextHeading = normalizeSafe(stateSelf.forward + params.deltaTime * params.timeScale * (normalHeading - stateSelf.forward));
-  // let nextHeading = normalizeSafe(stateSelf.forward + (normalHeading - stateSelf.forward));
+  vVel += (cMass * params.r1s) + (colVel * params.r2s) + (cVel * params.r3s);
 
+  // clamp velocity
+  vVel = normalize(vVel) * clamp(length(vVel), 0.0, 0.1);
+
+  // kinematic update
+  vPos = vPos + (vVel * params.deltaTime);
+
+  // wrap around boundary
+  if(vPos.x < -1.0) {
+    vPos.x = 1.0;
+  }
+
+  if(vPos.x > 1.0) {
+    vPos.x = -1.0;
+  }
+
+  if(vPos.y < -1.0) {
+    vPos.y = 1.0;
+  }
+
+  if(vPos.y > 1.0) {
+    vPos.y = -1.0;
+  }
 
   var stateResult: ParticleState;
-  stateResult.position = stateSelf.position + (nextHeading * moveSpeed * params.deltaTime * params.timeScale);
-  // stateResult.position = stateSelf.position + (nextHeading * moveSpeed);
-  stateResult.forward = nextHeading;
-  particleStatesOut[particleIndex] = stateResult;
+
+  stateResult.position = vPos;
+  stateResult.velocity = vVel;
+
+  particleStatesOut[index] = stateResult;
 }
 `;
