@@ -1,4 +1,5 @@
 import { particleShaderCode } from "./particleShader.js";
+import { computeShaderCode } from "./computeShader.js";
 
 const vertices = new Float32Array([-0.8, -0.8, 0.8, -0.8, 0.0, 0.8]);
 
@@ -15,7 +16,11 @@ const TARGET_WEIGHT = 0.5;
 const WORKGROUP_SIZE = 8;
 const FRAMERATE = 60;
 const FRAMETIME = 1000 / FRAMERATE;
-const TIMESCALE = 0.02;
+
+const parameters = {
+  deltaTime: 0.0,
+  timeScale: 0.02,
+};
 
 let step = 0;
 
@@ -125,8 +130,11 @@ export class Renderer {
     });
 
     // uniform buffer
-    const uniformBufferSize = 1 * 4;
-    this.uniformValues = new Float32Array(uniformBufferSize / 4);
+    const uniformBufferSize = 2 * Float32Array.BYTES_PER_ELEMENT;
+    this.uniformValues = new Float32Array([
+      parameters.deltaTime,
+      parameters.timeScale,
+    ]);
     this.uniformBuffer = this.device.createBuffer({
       size: uniformBufferSize,
       usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST,
@@ -202,66 +210,7 @@ export class Renderer {
 
     const simulationShaderModule = this.device.createShaderModule({
       label: "compute shader",
-      code: `
-struct ParticleState {
-  position: vec2f,
-  forward: vec2f
-};
-
-@group(0) @binding(0) var<storage> particleStatesIn: array<ParticleState>;
-@group(0) @binding(1) var<storage, read_write> particleStatesOut: array<ParticleState>; 
-
-@group(0) @binding(2) var<uniform> deltaTime: f32;
-
-const numParticles = ${PARTICLE_COUNT};
-const alignmentWeight = ${ALIGNMENT_WEIGHT};
-const separationWeight = ${SEPARATION_WEIGHT};
-const targetWeight = ${TARGET_WEIGHT};
-const targetPosition = vec2f(0);
-const moveSpeed = ${MOVE_SPEED};
-
-fn normalizeSafe(v: vec2f) -> vec2f {
-  if(length(v) > 0) {
-    return normalize(v);
-  }
-  return vec2f(0);
-}
-
-@compute
-@workgroup_size(${WORKGROUP_SIZE}, 1, 1)
-fn computeMain(@builtin(global_invocation_id) id: vec3u) {
-
-  let particleIndex = id.x;
-  let stateSelf = particleStatesIn[particleIndex];
-  var cellAlignment: vec2f;
-  var cellSeparation: vec2f;
-
-  for(var i = 0; i < numParticles; i++) {
-    if (i == i32(particleIndex)) {
-      continue;
-    }
-
-    let stateOther = particleStatesIn[i];
-    cellAlignment += stateOther.forward;
-    cellSeparation += stateOther.position;
-  }
-
-  let alignmentResult = alignmentWeight * normalizeSafe((cellAlignment / numParticles) - stateSelf.forward);
-  let separationResult = separationWeight * normalizeSafe((stateSelf.position / numParticles) - cellSeparation);
-  let targetHeading = targetWeight * normalizeSafe(targetPosition - stateSelf.position);
-
-  let normalHeading = normalizeSafe(alignmentResult + separationResult + targetHeading);
-  let nextHeading = normalizeSafe(stateSelf.forward + deltaTime * ${TIMESCALE} * (normalHeading - stateSelf.forward));
-  // let nextHeading = normalizeSafe(stateSelf.forward + (normalHeading - stateSelf.forward));
-
-
-  var stateResult: ParticleState;
-  stateResult.position = stateSelf.position + (nextHeading * moveSpeed * deltaTime * ${TIMESCALE});
-  // stateResult.position = stateSelf.position + (nextHeading * moveSpeed);
-  stateResult.forward = nextHeading;
-  particleStatesOut[particleIndex] = stateResult;
-}
-      `,
+      code: computeShaderCode,
     });
 
     this.simulationPipeline = this.device.createComputePipeline({
