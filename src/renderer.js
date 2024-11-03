@@ -1,11 +1,11 @@
 import { particleShaderCode } from "./particleShader.js";
 import { computeShaderCode } from "./computeShader.js";
+import { Vector2 } from "./vector2.js";
 
 const vertices = new Float32Array([-0.01, -0.02, 0.01, -0.02, 0.0, 0.02]);
 
 const canvas = document.querySelector("canvas");
 
-const PARTICLE_COUNT = 1500;
 const parameters = {
   deltaTime: 0.04,
   r1d: 0.1,
@@ -19,7 +19,11 @@ const parameters = {
 let step = 0;
 
 export class Renderer {
-  constructor() {
+  constructor(particleCount, useGPU = true) {
+    this.particleCount = particleCount;
+    this.useGPU = useGPU;
+    console.log(`Using ${this.useGPU ? "GPU" : "CPU"}`);
+
     this.setup().then(() => {
       // start animation
       requestAnimationFrame(this.frame.bind(this));
@@ -58,17 +62,6 @@ export class Renderer {
       vertices
     );
 
-    const vertexBufferLayout = {
-      arrayStride: 8,
-      attributes: [
-        {
-          format: "float32x2",
-          offset: 0,
-          shaderLocation: 0, // Position, see vertex shader
-        },
-      ],
-    };
-
     const particleShaderModule = this.device.createShaderModule({
       label: "Particle shader",
       code: particleShaderCode,
@@ -79,7 +72,7 @@ export class Renderer {
       entries: [
         {
           binding: 0,
-          visibility: GPUShaderStage.VERTEX | GPUShaderStage.COMPUTE,
+          visibility: GPUShaderStage.COMPUTE,
           buffer: { type: "read-only-storage" }, // particle state input buffer
         },
         {
@@ -109,7 +102,38 @@ export class Renderer {
       vertex: {
         module: particleShaderModule,
         entryPoint: "vertexMain",
-        buffers: [vertexBufferLayout],
+        buffers: [
+          {
+            // vertex buffer
+            arrayStride: 8,
+            attributes: [
+              {
+                format: "float32x2",
+                offset: 0,
+                shaderLocation: 0, // Position, see vertex shader
+              },
+            ],
+          },
+          {
+            // instance particle buffer
+            arrayStride: 4 * 4,
+            stepMode: "instance",
+            attributes: [
+              {
+                // instance position
+                shaderLocation: 1,
+                offset: 0,
+                format: "float32x2",
+              },
+              {
+                // instance velocity
+                shaderLocation: 2,
+                offset: 2 * 4,
+                format: "float32x2",
+              },
+            ],
+          },
+        ],
       },
       fragment: {
         module: particleShaderModule,
@@ -140,17 +164,23 @@ export class Renderer {
     });
     this.device.queue.writeBuffer(this.uniformBuffer, 0, this.uniformValues);
 
-    this.particleStateArray = new Float32Array(PARTICLE_COUNT * 4);
+    this.particleStateArray = new Float32Array(this.particleCount * 4);
     this.particleStateStorage = [
       this.device.createBuffer({
         label: "Particle state A",
         size: this.particleStateArray.byteLength,
-        usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST,
+        usage:
+          GPUBufferUsage.VERTEX |
+          GPUBufferUsage.STORAGE |
+          GPUBufferUsage.COPY_DST,
       }),
       this.device.createBuffer({
         label: "Particle state B",
         size: this.particleStateArray.byteLength,
-        usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST,
+        usage:
+          GPUBufferUsage.VERTEX |
+          GPUBufferUsage.STORAGE |
+          GPUBufferUsage.COPY_DST,
       }),
     ];
 
@@ -221,42 +251,146 @@ export class Renderer {
     });
   }
 
+  cpuSimulationStep() {
+    const resultStateArray = new Float32Array(this.particleCount * 4);
+
+    for (let i = 0; i < this.particleCount; i++) {
+      let vPos = new Vector2(
+        this.particleStateArray[i * 4 + 0],
+        this.particleStateArray[i * 4 + 1]
+      );
+      let vVel = new Vector2(
+        this.particleStateArray[i * 4 + 2],
+        this.particleStateArray[i * 4 + 3]
+      );
+
+      let cMass = new Vector2();
+      let cVel = new Vector2();
+      let colVel = new Vector2();
+      let cMassCount = 0;
+      let cVelCount = 0;
+
+      let pos, vel;
+
+      for (let ii = 0; ii < this.particleCount; ii++) {
+        if (i === ii) {
+          continue;
+        }
+
+        pos = new Vector2(
+          this.particleStateArray[ii * 4 + 0],
+          this.particleStateArray[ii * 4 + 1]
+        );
+        vel = new Vector2(
+          this.particleStateArray[ii * 4 + 2],
+          this.particleStateArray[ii * 4 + 3]
+        );
+
+        if (Vector2.distance(pos, vPos) < parameters.r1d) {
+          cMass = cMass.add(pos);
+          cMassCount++;
+        }
+
+        if (Vector2.distance(pos, vPos) < parameters.r2d) {
+          colVel = colVel.subtract(pos.subtract(vPos));
+        }
+
+        if (Vector2.distance(pos, vPos) < parameters.r3d) {
+          cVel = cVel.add(vel);
+          cVelCount++;
+        }
+      }
+
+      if (cMassCount > 0) {
+        cMass = cMass.scale(1 / cMassCount).subtract(vPos);
+      }
+
+      if (cVelCount > 0) {
+        cVel = cVel.scale(1 / cVelCount);
+      }
+
+      vVel = vVel
+        .add(cMass.scale(parameters.r1s))
+        .add(colVel.scale(parameters.r2s))
+        .add(cVel.scale(parameters.r3s));
+
+      // clamp velocity
+      const vVelLen = vVel.length();
+      vVel = Vector2.normalize(vVel).scale(
+        Math.min(Math.max(vVelLen, 0.0), 0.1)
+      );
+
+      // kinematic update
+      vPos = vPos.add(vVel.scale(parameters.deltaTime));
+
+      // wrap around boundary
+      if (vPos.x < -1.0) {
+        vPos.x = 1.0;
+      }
+
+      if (vPos.x > 1.0) {
+        vPos.x = -1.0;
+      }
+
+      if (vPos.y < -1.0) {
+        vPos.y = 1.0;
+      }
+
+      if (vPos.y > 1.0) {
+        vPos.y = -1.0;
+      }
+
+      resultStateArray[i * 4 + 0] = vPos.x;
+      resultStateArray[i * 4 + 1] = vPos.y;
+      resultStateArray[i * 4 + 2] = vVel.x;
+      resultStateArray[i * 4 + 3] = vVel.y;
+    }
+
+    return resultStateArray;
+  }
+
   frame() {
+    const commandEncoder = this.device.createCommandEncoder();
 
-    const encoder = this.device.createCommandEncoder();
+    if (this.useGPU) {
+      // compute pass
+      const pass = commandEncoder.beginComputePass();
+      pass.setPipeline(this.simulationPipeline);
+      pass.setBindGroup(0, this.bindGroups[step % 2]);
+      pass.dispatchWorkgroups(Math.ceil(this.particleCount / 64), 1, 1);
+      pass.end();
+    } else {
+      const stateArray = this.cpuSimulationStep();
+      this.device.queue.writeBuffer(
+        this.particleStateStorage[step % 2],
+        0,
+        stateArray
+      );
+      this.particleStateArray = stateArray;
+    }
 
-    const computePass = encoder.beginComputePass();
-    computePass.setPipeline(this.simulationPipeline);
-    computePass.setBindGroup(0, this.bindGroups[step % 2]);
-
-    computePass.dispatchWorkgroups(
-      Math.ceil(PARTICLE_COUNT / 64),
-      1,
-      1
-    );
-
-    computePass.end();
-
-    const pass = encoder.beginRenderPass({
-      colorAttachments: [
-        {
-          view: this.context.getCurrentTexture().createView(),
-          loadOp: "clear",
-          clearValue: { r: 0.02, g: 0.02, b: 0.02, a: 1 },
-          storeOp: "store",
-        },
-      ],
-    });
-
-    pass.setPipeline(this.particleRenderPipeline);
-    pass.setVertexBuffer(0, this.vertexBuffer);
-    pass.setBindGroup(0, this.bindGroups[step % 2]);
-    pass.draw(vertices.length / 2, PARTICLE_COUNT);
-
-    pass.end();
+    {
+      // render pass
+      const pass = commandEncoder.beginRenderPass({
+        colorAttachments: [
+          {
+            view: this.context.getCurrentTexture().createView(),
+            loadOp: "clear",
+            clearValue: { r: 0.02, g: 0.02, b: 0.02, a: 1 },
+            storeOp: "store",
+          },
+        ],
+      });
+      pass.setPipeline(this.particleRenderPipeline);
+      pass.setVertexBuffer(0, this.vertexBuffer);
+      pass.setVertexBuffer(1, this.particleStateStorage[step % 2]);
+      pass.setBindGroup(0, this.bindGroups[step % 2]);
+      pass.draw(vertices.length / 2, this.particleCount);
+      pass.end();
+    }
 
     // Finish the command buffer and immediately submit it.
-    this.device.queue.submit([encoder.finish()]);
+    this.device.queue.submit([commandEncoder.finish()]);
 
     step++;
 
