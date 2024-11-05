@@ -7,6 +7,7 @@ struct VertexAttributes {
 
 struct VertexOutput {
   @builtin(position) pos: vec4f,
+  @location(3) color: vec4f,
 };
 
 @vertex
@@ -21,12 +22,18 @@ fn vertexMain(attr: VertexAttributes) -> VertexOutput {
 
   var output: VertexOutput;
   output.pos = vec4f((pos + attr.particlePos), 0, 1);
+  output.color = vec4f(
+    1.0 - sin(angle + 1.0) - attr.particleVel.y,
+    pos.x * 100.0 - attr.particleVel.y + 0.1,
+    attr.particleVel.x + cos(angle + 0.5),
+    1.0
+  );
   return output;
 }
 
 
 @fragment
-fn fragmentMain() -> @location(0) vec4f {
-  return vec4f(1, 1, 1, 1);
+fn fragmentMain(@location(3) color: vec4f) -> @location(0) vec4f {
+  return color;
 }
 `;

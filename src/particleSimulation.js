@@ -14,11 +14,12 @@ const parameters = {
   r1s: 0.02,
   r2s: 0.05,
   r3s: 0.005,
+  maxSpeed: 0.05,
 };
 
 let step = 0;
 
-export class Renderer {
+export class ParticleSimulation {
   constructor(particleCount, useGPU = true) {
     this.particleCount = particleCount;
     this.useGPU = useGPU;
@@ -157,6 +158,7 @@ export class Renderer {
       parameters.r1s,
       parameters.r2s,
       parameters.r3s,
+      parameters.maxSpeed,
     ]);
     this.uniformBuffer = this.device.createBuffer({
       size: uniformBufferSize,
@@ -317,7 +319,7 @@ export class Renderer {
       // clamp velocity
       const vVelLen = vVel.length();
       vVel = Vector2.normalize(vVel).scale(
-        Math.min(Math.max(vVelLen, 0.0), 0.1)
+        Math.min(Math.max(vVelLen, 0.0), parameters.maxSpeed)
       );
 
       // kinematic update

@@ -8,9 +8,10 @@
   <body>
     <canvas width="800" height="800"></canvas>
     <script type="module">
-      import {Renderer} from './src/renderer.js';
+      'use strict';
+      import { ParticleSimulation } from "./src/particleSimulation.js";
 
-      const renderer = new Renderer(1000, true);
+      const particleSimulation = new ParticleSimulation(1000, true);
     </script>
   </body>
 </html>
