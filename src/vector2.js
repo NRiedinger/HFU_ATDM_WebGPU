@@ -22,11 +22,12 @@ export class Vector2 {
 
   static normalize(v) {
     const l = v.length();
+    if(l == 0) return new Vector2(1, 0);
     return new Vector2(v.x / l, v.y / l);
   }
 
   static distance(v1, v2) {
     const vResult = v2.subtract(v1);
-    return vResult.length;
+    return vResult.length();
   }
 }
