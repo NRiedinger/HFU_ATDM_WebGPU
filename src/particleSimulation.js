@@ -7,15 +7,28 @@ const vertices = new Float32Array([-0.01, -0.02, 0.01, -0.02, 0.0, 0.02]);
 const canvas = document.querySelector("canvas");
 
 const parameters = {
-  deltaTime: 0.04,
+  deltaTime: 0, // updated in render loop
+  timeScale: 5.0,
+  maxSpeed: 0.1,
   r1d: 0.1,
   r2d: 0.025,
   r3d: 0.025,
   r1s: 0.02,
   r2s: 0.05,
   r3s: 0.005,
-  maxSpeed: 0.05,
 };
+
+const performanceKeys = [
+  "deltaTime",
+  "timeScale",
+  "maxSpeed",
+  "r1d",
+  "r2d",
+  "r3d",
+  "r1s",
+  "r2s",
+  "r3s",
+];
 
 let step = 0;
 
@@ -25,8 +38,11 @@ export class ParticleSimulation {
     this.useGPU = useGPU;
     console.log(`Using ${this.useGPU ? "GPU" : "CPU"}`);
 
+    this.setupUI();
+
     this.setup().then(() => {
       // start animation
+      this.lastAnimationTime = Date.now();
       requestAnimationFrame(this.frame.bind(this));
     });
   }
@@ -152,13 +168,14 @@ export class ParticleSimulation {
       Object.keys(parameters).length * Float32Array.BYTES_PER_ELEMENT;
     this.uniformValues = new Float32Array([
       parameters.deltaTime,
+      parameters.timeScale,
+      parameters.maxSpeed,
       parameters.r1d,
       parameters.r2d,
       parameters.r3d,
       parameters.r1s,
       parameters.r2s,
       parameters.r3s,
-      parameters.maxSpeed,
     ]);
     this.uniformBuffer = this.device.createBuffer({
       size: uniformBufferSize,
@@ -323,7 +340,9 @@ export class ParticleSimulation {
       );
 
       // kinematic update
-      vPos = vPos.add(vVel.scale(parameters.deltaTime));
+      vPos = vPos.add(
+        vVel.scale(parameters.deltaTime).scale(parameters.timeScale)
+      );
 
       // wrap around boundary
       if (vPos.x < -1.0) {
@@ -351,7 +370,57 @@ export class ParticleSimulation {
     return resultStateArray;
   }
 
+  updateUI() {
+    const uiContainer = document.getElementById("ui-stats-container");
+
+    const children = Array.from(uiContainer.children);
+    for (const idx in children) {
+      const child = children[idx];
+      const span = child.querySelector("div[data-key]");
+      const key = span.getAttribute("data-key");
+      if (!key) continue;
+
+      span.innerText = parameters[key];
+    }
+  }
+
+  setupUI() {
+    const uiContainer = document.getElementById("ui-stats-container");
+
+    // remove all children from container
+    while (uiContainer.firstChild) {
+      uiContainer.removeChild(uiContainer.lastChild);
+    }
+
+    for (const idx in performanceKeys) {
+      const key = performanceKeys[idx];
+      const value = parameters[key];
+
+      const uiRow = document.createElement("div");
+      uiRow.classList.add("ui-row");
+
+      const uiKey = document.createElement("div");
+      uiKey.innerText = key;
+      uiRow.appendChild(uiKey);
+
+      const uiValue = document.createElement("div");
+      uiValue.setAttribute("data-key", key);
+      uiValue.innerText = value;
+      uiRow.appendChild(uiValue);
+
+      uiContainer.appendChild(uiRow);
+    }
+
+    setInterval(this.updateUI, 100);
+  }
+
   frame() {
+    parameters.deltaTime = (Date.now() - this.lastAnimationTime) / 1000;
+    this.lastAnimationTime = Date.now();
+
+    this.uniformValues.set([parameters.deltaTime], 0);
+    this.device.queue.writeBuffer(this.uniformBuffer, 0, this.uniformValues);
+
     const commandEncoder = this.device.createCommandEncoder();
 
     if (this.useGPU) {

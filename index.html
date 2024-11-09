@@ -4,14 +4,45 @@
   <head>
     <meta charset="utf-8" />
     <title>ATDM WebGPU</title>
+
+    <style>
+      .container {
+        display: flex;
+        flex-direction: row;
+        align-items: stretch;
+      }
+
+      .ui-container {
+        width: 400px;
+        background-color: rgb(50, 50, 50);
+      }
+
+      .ui-row {
+        display: flex;
+        flex-direction: row;
+        justify-content: space-between;
+        padding: 3px 10px;
+      }
+    </style>
   </head>
   <body>
-    <canvas width="800" height="800"></canvas>
+    <div class="container">
+      <canvas width="800" height="800"></canvas>
+      <div class="ui-container">
+        <div id="ui-stats-container" class="ui-stats">
+          <div class="ui-row">
+            <span>Key</span>
+            <span>Value</span>
+          </div>
+        </div>
+      </div>
+    </div>
+
     <script type="module">
-      'use strict';
+      "use strict";
       import { ParticleSimulation } from "./src/particleSimulation.js";
 
-      const particleSimulation = new ParticleSimulation(1000, true);
+      const particleSimulation = new ParticleSimulation(5000, true);
     </script>
   </body>
 </html>
