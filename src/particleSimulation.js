@@ -23,6 +23,12 @@ const parameters = {
   r3s: 0.005,
 };
 
+const performanceValues = {
+  GPUSimulationPassDuration: 0,
+  CPUSimulationPassDuration: 0,
+  renderPassDuration: 0,
+};
+
 let step = 0;
 
 export class ParticleSimulation {
@@ -50,7 +56,10 @@ export class ParticleSimulation {
       throw new Error("No appropriate GPUAdapter found.");
     }
 
-    this.device = await adapter.requestDevice();
+    this.hasTimestampQuery = adapter.features.has("timestamp-query");
+    this.device = await adapter.requestDevice({
+      requiredFeatures: this.hasTimestampQuery ? ["timestamp-query"] : [],
+    });
 
     this.context = canvas.getContext("webgpu");
     const canvasFormat = navigator.gpu.getPreferredCanvasFormat();
@@ -71,6 +80,17 @@ export class ParticleSimulation {
       /*bufferOffset=*/ 0,
       vertices
     );
+
+    this.renderPassDescriptor = {
+      colorAttachments: [
+        {
+          view: undefined, // will be set in frame()
+          loadOp: "clear",
+          clearValue: { r: 0.02, g: 0.02, b: 0.02, a: 1 },
+          storeOp: "store",
+        },
+      ],
+    };
 
     const particleShaderModule = this.device.createShaderModule({
       label: "Particle shader",
@@ -261,6 +281,35 @@ export class ParticleSimulation {
         entryPoint: "computeMain",
       },
     });
+
+    this.simulationPassDescriptor = {};
+
+    // timestamp queries
+    this.spareResultBuffers = [];
+
+    if (this.hasTimestampQuery) {
+      this.querySet = this.device.createQuerySet({
+        type: "timestamp",
+        count: 4,
+      });
+
+      this.resolveBuffer = this.device.createBuffer({
+        size: 4 * BigInt64Array.BYTES_PER_ELEMENT,
+        usage: GPUBufferUsage.QUERY_RESOLVE | GPUBufferUsage.COPY_SRC,
+      });
+
+      this.simulationPassDescriptor.timestampWrites = {
+        querySet: this.querySet,
+        beginningOfPassWriteIndex: 0,
+        endOfPassWriteIndex: 1,
+      };
+
+      this.renderPassDescriptor.timestampWrites = {
+        querySet: this.querySet,
+        beginningOfPassWriteIndex: 2,
+        endOfPassWriteIndex: 3,
+      };
+    }
   }
 
   cpuSimulationStep() {
@@ -364,42 +413,82 @@ export class ParticleSimulation {
   }
 
   updateUI() {
-    const uiContainer = document.getElementById("ui-parameters-container");
+    {
+      const uiContainer = document.getElementById("ui-parameters-container");
 
-    const children = Array.from(uiContainer.children);
-    for (const idx in children) {
-      const child = children[idx];
-      const span = child.querySelector("div[data-key]");
-      const key = span.getAttribute("data-key");
-      if (!key) continue;
+      const children = Array.from(uiContainer.children);
+      for (const idx in children) {
+        const child = children[idx];
+        const span = child.querySelector("div[data-key]");
+        const key = span.getAttribute("data-key");
+        if (!key) continue;
 
-      span.innerText = parameters[key].toFixed(4);
+        span.innerText = parameters[key].toFixed(4);
+      }
+    }
+
+    {
+      const uiContainer = document.getElementById("ui-performance-container");
+
+      const children = Array.from(uiContainer.children);
+      for (const idx in children) {
+        const child = children[idx];
+        const span = child.querySelector("div[data-key]");
+        const key = span.getAttribute("data-key");
+        if (!key) continue;
+
+        span.innerText = performanceValues[key].toFixed(6);
+      }
     }
   }
 
   setupUI() {
     {
-      const uiContainer = document.getElementById("ui-parameters-container");
+      {
+        const uiContainer = document.getElementById("ui-parameters-container");
 
-      // remove all children from container
-      while (uiContainer.firstChild) {
-        uiContainer.removeChild(uiContainer.lastChild);
+        // remove all children from container
+        while (uiContainer.firstChild) {
+          uiContainer.removeChild(uiContainer.lastChild);
+        }
+
+        for (const [key, value] of Object.entries(parameters)) {
+          const uiRow = document.createElement("div");
+          uiRow.classList.add("ui-row");
+
+          const uiKey = document.createElement("div");
+          uiKey.innerText = key;
+          uiRow.appendChild(uiKey);
+
+          const uiValue = document.createElement("div");
+          uiValue.setAttribute("data-key", key);
+          uiRow.appendChild(uiValue);
+
+          uiContainer.appendChild(uiRow);
+        }
       }
 
-      for (const [key, value] of Object.entries(parameters)) {
-        const uiRow = document.createElement("div");
-        uiRow.classList.add("ui-row");
+      {
+        const uiContainer = document.getElementById("ui-performance-container");
 
-        const uiKey = document.createElement("div");
-        uiKey.innerText = key;
-        uiRow.appendChild(uiKey);
+        while (uiContainer.firstChild) {
+          uiContainer.removeChild(uiContaienr.lastChild);
+        }
 
-        const uiValue = document.createElement("div");
-        uiValue.setAttribute("data-key", key);
-        uiValue.innerText = value.toFixed(4);
-        uiRow.appendChild(uiValue);
+        for (const [key, value] of Object.entries(performanceValues)) {
+          const uiRow = document.createElement("div");
+          uiRow.classList.add("ui-row");
 
-        uiContainer.appendChild(uiRow);
+          const uiKey = document.createElement("div");
+          uiKey.innerText = key;
+          uiRow.appendChild(uiKey);
+
+          const uiValue = document.createElement("div");
+          uiValue.setAttribute("data-key", key);
+          uiRow.appendChild(uiValue);
+
+          uiContainer.appendChild(uiRow);
+        }
       }
     }
 
@@ -410,6 +499,10 @@ export class ParticleSimulation {
     parameters.deltaTime = (performance.now() - this.lastAnimationTime) / 1000;
     this.lastAnimationTime = performance.now();
 
+    this.renderPassDescriptor.colorAttachments[0].view = this.context
+      .getCurrentTexture()
+      .createView();
+
     this.uniformValues.set([parameters.deltaTime], 0);
     this.device.queue.writeBuffer(this.uniformBuffer, 0, this.uniformValues);
 
@@ -417,13 +510,17 @@ export class ParticleSimulation {
 
     if (this.useGPU) {
       // compute pass
-      const pass = commandEncoder.beginComputePass();
+      const pass = commandEncoder.beginComputePass(
+        this.simulationPassDescriptor
+      );
       pass.setPipeline(this.simulationPipeline);
       pass.setBindGroup(0, this.bindGroups[step % 2]);
       pass.dispatchWorkgroups(Math.ceil(this.particleCount / 64), 1, 1);
       pass.end();
     } else {
+      const cpuSimStart = performance.now();
       const stateArray = this.cpuSimulationStep();
+      performanceValues.CPUSimulationPassDuration = performance.now() - cpuSimStart;
       this.device.queue.writeBuffer(
         this.particleStateStorage[step % 2],
         0,
@@ -434,16 +531,7 @@ export class ParticleSimulation {
 
     {
       // render pass
-      const pass = commandEncoder.beginRenderPass({
-        colorAttachments: [
-          {
-            view: this.context.getCurrentTexture().createView(),
-            loadOp: "clear",
-            clearValue: { r: 0.02, g: 0.02, b: 0.02, a: 1 },
-            storeOp: "store",
-          },
-        ],
-      });
+      const pass = commandEncoder.beginRenderPass(this.renderPassDescriptor);
       pass.setPipeline(this.particleRenderPipeline);
       pass.setVertexBuffer(0, this.vertexBuffer);
       pass.setVertexBuffer(1, this.particleStateStorage[step % 2]);
@@ -452,8 +540,54 @@ export class ParticleSimulation {
       pass.end();
     }
 
+    let resultBuffer;
+    if (this.hasTimestampQuery) {
+      resultBuffer =
+        this.spareResultBuffers.pop() ||
+        this.device.createBuffer({
+          size: 4 * BigInt64Array.BYTES_PER_ELEMENT,
+          usage: GPUBufferUsage.COPY_DST | GPUBufferUsage.MAP_READ,
+        });
+
+      commandEncoder.resolveQuerySet(
+        this.querySet,
+        0,
+        4,
+        this.resolveBuffer,
+        0
+      );
+      commandEncoder.copyBufferToBuffer(
+        this.resolveBuffer,
+        0,
+        resultBuffer,
+        0,
+        resultBuffer.size
+      );
+    }
+
     // Finish the command buffer and immediately submit it.
     this.device.queue.submit([commandEncoder.finish()]);
+
+    if (this.hasTimestampQuery) {
+      resultBuffer.mapAsync(GPUMapMode.READ).then(() => {
+        const timestamps = new BigInt64Array(resultBuffer.getMappedRange());
+        const simulationPassDuration = Number(timestamps[1] - timestamps[0]);
+        const renderPassDuration = Number(timestamps[3] - timestamps[2]);
+
+        if (simulationPassDuration > 0 && renderPassDuration > 0) {
+          performanceValues.GPUSimulationPassDuration = Math.round(
+            simulationPassDuration / 1000 / 1000
+          );
+
+          performanceValues.renderPassDuration = Math.round(
+            renderPassDuration / 1000 / 1000
+          );
+        }
+        resultBuffer.unmap();
+
+        this.spareResultBuffers.push(resultBuffer);
+      });
+    }
 
     step++;
 
