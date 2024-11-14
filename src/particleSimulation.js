@@ -2,7 +2,12 @@ import { particleShaderCode } from "./particleShader.js";
 import { computeShaderCode } from "./computeShader.js";
 import { Vector2 } from "./vector2.js";
 
-const vertices = new Float32Array([-0.01, -0.02, 0.01, -0.02, 0.0, 0.02]);
+// prettier-ignore
+const vertices = new Float32Array([
+  -0.01, -0.02, 
+  0.01, -0.02, 
+  0.0, 0.02
+]);
 
 const canvas = document.querySelector("canvas");
 
@@ -18,18 +23,6 @@ const parameters = {
   r3s: 0.005,
 };
 
-const performanceKeys = [
-  "deltaTime",
-  "timeScale",
-  "maxSpeed",
-  "r1d",
-  "r2d",
-  "r3d",
-  "r1s",
-  "r2s",
-  "r3s",
-];
-
 let step = 0;
 
 export class ParticleSimulation {
@@ -42,7 +35,7 @@ export class ParticleSimulation {
 
     this.setup().then(() => {
       // start animation
-      this.lastAnimationTime = Date.now();
+      this.lastAnimationTime = performance.now();
       requestAnimationFrame(this.frame.bind(this));
     });
   }
@@ -371,7 +364,7 @@ export class ParticleSimulation {
   }
 
   updateUI() {
-    const uiContainer = document.getElementById("ui-stats-container");
+    const uiContainer = document.getElementById("ui-parameters-container");
 
     const children = Array.from(uiContainer.children);
     for (const idx in children) {
@@ -380,43 +373,42 @@ export class ParticleSimulation {
       const key = span.getAttribute("data-key");
       if (!key) continue;
 
-      span.innerText = parameters[key];
+      span.innerText = parameters[key].toFixed(4);
     }
   }
 
   setupUI() {
-    const uiContainer = document.getElementById("ui-stats-container");
+    {
+      const uiContainer = document.getElementById("ui-parameters-container");
 
-    // remove all children from container
-    while (uiContainer.firstChild) {
-      uiContainer.removeChild(uiContainer.lastChild);
-    }
+      // remove all children from container
+      while (uiContainer.firstChild) {
+        uiContainer.removeChild(uiContainer.lastChild);
+      }
 
-    for (const idx in performanceKeys) {
-      const key = performanceKeys[idx];
-      const value = parameters[key];
+      for (const [key, value] of Object.entries(parameters)) {
+        const uiRow = document.createElement("div");
+        uiRow.classList.add("ui-row");
 
-      const uiRow = document.createElement("div");
-      uiRow.classList.add("ui-row");
+        const uiKey = document.createElement("div");
+        uiKey.innerText = key;
+        uiRow.appendChild(uiKey);
 
-      const uiKey = document.createElement("div");
-      uiKey.innerText = key;
-      uiRow.appendChild(uiKey);
+        const uiValue = document.createElement("div");
+        uiValue.setAttribute("data-key", key);
+        uiValue.innerText = value.toFixed(4);
+        uiRow.appendChild(uiValue);
 
-      const uiValue = document.createElement("div");
-      uiValue.setAttribute("data-key", key);
-      uiValue.innerText = value;
-      uiRow.appendChild(uiValue);
-
-      uiContainer.appendChild(uiRow);
+        uiContainer.appendChild(uiRow);
+      }
     }
 
     setInterval(this.updateUI, 100);
   }
 
   frame() {
-    parameters.deltaTime = (Date.now() - this.lastAnimationTime) / 1000;
-    this.lastAnimationTime = Date.now();
+    parameters.deltaTime = (performance.now() - this.lastAnimationTime) / 1000;
+    this.lastAnimationTime = performance.now();
 
     this.uniformValues.set([parameters.deltaTime], 0);
     this.device.queue.writeBuffer(this.uniformBuffer, 0, this.uniformValues);
