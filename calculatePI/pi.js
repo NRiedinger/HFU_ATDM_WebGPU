@@ -16,7 +16,10 @@ export async function run() {
     throw new Error("No appropriate GPU adapter found.");
   }
 
-  const device = await adapter.requestDevice();
+  const hasTimestampQuery = adapter.features.has("timestamp-query");
+  const device = await adapter.requestDevice({
+    requiredFeatures: hasTimestampQuery ? ["timestamp-query"] : [],
+  });
 
   const computePipeline = device.createComputePipeline({
     label: "compute pipeline",
@@ -29,6 +32,27 @@ export async function run() {
     },
   });
 
+  const computePassDescriptor = {};
+  let querySet, resolveBuffer;
+  const spareResultBuffers = [];
+  if (hasTimestampQuery) {
+    querySet = device.createQuerySet({
+      type: "timestamp",
+      count: 2,
+    });
+
+    resolveBuffer = device.createBuffer({
+      size: 2 * BigInt64Array.BYTES_PER_ELEMENT,
+      usage: GPUBufferUsage.QUERY_RESOLVE | GPUBufferUsage.COPY_SRC,
+    });
+
+    computePassDescriptor.timestampWrites = {
+      querySet: querySet,
+      beginningOfPassWriteIndex: 0,
+      endOfPassWriteIndex: 1,
+    };
+  }
+
   const uniformValues = new Int32Array([
     parameters.iterations,
     parameters.seed,
@@ -38,8 +62,6 @@ export async function run() {
     usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST,
   });
   device.queue.writeBuffer(uniformBuffer, 0, uniformValues);
-
-  const startTime = performance.now();
 
   const valueCount = parameters.numParallelCalculations;
   const valueArray = new Int32Array(valueCount);
@@ -52,7 +74,7 @@ export async function run() {
     usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_SRC,
   });
 
-  const resultBuffer = device.createBuffer({
+  const computeResultBuffer = device.createBuffer({
     size: valueArray.byteLength,
     usage: GPUBufferUsage.MAP_READ | GPUBufferUsage.COPY_DST,
   });
@@ -65,10 +87,10 @@ export async function run() {
     ],
   });
 
-
+  const startTime = performance.now();
 
   const commandEncoder = device.createCommandEncoder();
-  const passEncoder = commandEncoder.beginComputePass();
+  const passEncoder = commandEncoder.beginComputePass(computePassDescriptor);
 
   passEncoder.setPipeline(computePipeline);
   passEncoder.setBindGroup(0, bindGroup);
@@ -78,19 +100,52 @@ export async function run() {
   commandEncoder.copyBufferToBuffer(
     computeBuffer,
     0,
-    resultBuffer,
+    computeResultBuffer,
     0,
-    resultBuffer.size
+    computeResultBuffer.size
   );
 
-  
+  let timestampResultBuffer;
+  if (hasTimestampQuery) {
+    timestampResultBuffer =
+      spareResultBuffers.pop() ||
+      device.createBuffer({
+        size: 2 * BigInt64Array.BYTES_PER_ELEMENT,
+        usage: GPUBufferUsage.COPY_DST | GPUBufferUsage.MAP_READ,
+      });
+
+    commandEncoder.resolveQuerySet(querySet, 0, 2, resolveBuffer, 0);
+    commandEncoder.copyBufferToBuffer(
+      resolveBuffer,
+      0,
+      timestampResultBuffer,
+      0,
+      timestampResultBuffer.size
+    );
+  }
 
   device.queue.submit([commandEncoder.finish()]);
 
-  
+  if (hasTimestampQuery) {
+    timestampResultBuffer.mapAsync(GPUMapMode.READ).then(() => {
+      const times = new BigInt64Array(timestampResultBuffer.getMappedRange());
+      const computePassDuration = Number(times[1] - times[0]);
 
-  await resultBuffer.mapAsync(GPUMapMode.READ);
-  const result = new Int32Array(resultBuffer.getMappedRange());
+      if (computePassDuration > 0) {
+        document.getElementById(
+          "result_GPUtime"
+        ).textContent = `compute pass duration: ${
+          computePassDuration / 1000
+        } µs`;
+      }
+
+      timestampResultBuffer.unmap();
+      spareResultBuffers.push(timestampResultBuffer);
+    });
+  }
+
+  await computeResultBuffer.mapAsync(GPUMapMode.READ);
+  const result = new Int32Array(computeResultBuffer.getMappedRange());
 
   let count = 0;
   for (let i = 0; i < result.length; i++) {
@@ -108,13 +163,12 @@ export async function run() {
   console.log("My PI:", calcPi);
   console.log("JS PI:", Math.PI);
 
-  const el = document.getElementById('result');
-  el.textContent = `\
-  samples in circle: ${count}
-  total samples: ${samples}
-  calculated PI: ${calcPi}
-  Math.PI:       ${Math.PI}
+  document.getElementById("result").textContent = `\
+samples in circle: ${count}
+total samples:     ${samples}
 
-  duration: ${duration.toFixed(0)} ms;
-  `;
+calculated PI: ${calcPi}
+Math.PI:       ${Math.PI}
+
+Javascript duration:   ${duration.toFixed(0)} ms`;
 }
