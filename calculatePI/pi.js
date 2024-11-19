@@ -1,5 +1,10 @@
 import { computeShaderCode } from "./computeShader.js";
 
+const parameters = {
+  iterations: 1_000_000,
+  seed: Math.floor(Math.random() * 9999),
+};
+
 export async function run() {
   if (!navigator.gpu) {
     throw new Error("WebGPU is not supported on this browser");
@@ -23,10 +28,20 @@ export async function run() {
     },
   });
 
-  const valueCount = 100;
-  const valueArray = new Float32Array(valueCount);
+  const uniformValues = new Int32Array([
+    parameters.iterations,
+    parameters.seed,
+  ]);
+  const uniformBuffer = device.createBuffer({
+    size: uniformValues.byteLength,
+    usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST,
+  });
+  device.queue.writeBuffer(uniformBuffer, 0, uniformValues);
+
+  const valueCount = 6400;
+  const valueArray = new Int32Array(valueCount);
   for (let i = 0; i < valueArray.length; i++) {
-    valueArray[i] = 0.0;
+    valueArray[i] = 0;
   }
 
   const computeBuffer = device.createBuffer({
@@ -41,7 +56,10 @@ export async function run() {
 
   const bindGroup = device.createBindGroup({
     layout: computePipeline.getBindGroupLayout(0),
-    entries: [{ binding: 0, resource: { buffer: computeBuffer } }],
+    entries: [
+      { binding: 0, resource: { buffer: computeBuffer } },
+      { binding: 1, resource: { buffer: uniformBuffer } },
+    ],
   });
 
   const commandEncoder = device.createCommandEncoder();
@@ -63,7 +81,17 @@ export async function run() {
   device.queue.submit([commandEncoder.finish()]);
 
   await resultBuffer.mapAsync(GPUMapMode.READ);
-  const result = new Float32Array(resultBuffer.getMappedRange());
+  const result = new Int32Array(resultBuffer.getMappedRange());
 
-  console.log(result);
+  let count = 0;
+  for (let i = 0; i < result.length; i++) {
+    count += result[i];
+  }
+
+  const samples = valueCount * parameters.iterations;
+
+  //console.log(result);
+  console.log("count:", count);
+  console.log("samples:", samples);
+  console.log("PI:", 4.0 * (count / samples));
 }
