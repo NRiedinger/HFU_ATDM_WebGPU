@@ -2,8 +2,8 @@ import { computeShaderCode } from "./computeShader.js";
 
 const parameters = {
   iterations: 1_000_000,
-  numParallelCalculations: 100_000,
-  seed: Math.floor(Math.random() * 9999),
+  numParallelCalculations: 64_000,
+  seed: Math.floor(Math.random() * Number.MAX_SAFE_INTEGER),
 };
 
 export async function run() {
