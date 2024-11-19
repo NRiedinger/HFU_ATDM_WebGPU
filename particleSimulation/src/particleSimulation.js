@@ -12,6 +12,7 @@ const vertices = new Float32Array([
 const canvas = document.querySelector("canvas");
 
 const parameters = {
+  particleCount: 0,
   deltaTime: 0, // updated in render loop
   timeScale: 5.0,
   maxSpeed: 0.1,
@@ -24,8 +25,8 @@ const parameters = {
 };
 
 const performanceValues = {
-  GPUSimulationPassDuration: 0,
   CPUSimulationPassDuration: 0,
+  GPUSimulationPassDuration: 0,
   renderPassDuration: 0,
 };
 
@@ -34,6 +35,7 @@ let step = 0;
 export class ParticleSimulation {
   constructor(particleCount, useGPU = true) {
     this.particleCount = particleCount;
+    parameters.particleCount = particleCount;
     this.useGPU = useGPU;
     console.log(`Using ${this.useGPU ? "GPU" : "CPU"}`);
 
@@ -423,7 +425,7 @@ export class ParticleSimulation {
         const key = span.getAttribute("data-key");
         if (!key) continue;
 
-        span.innerText = parameters[key].toFixed(4);
+        span.innerText = parseFloat(parameters[key].toFixed(4));
       }
     }
 
@@ -437,7 +439,12 @@ export class ParticleSimulation {
         const key = span.getAttribute("data-key");
         if (!key) continue;
 
-        span.innerText = performanceValues[key].toFixed(6);
+        let unit = "µs";
+        if (key == "CPUSimulationPassDuration") {
+          unit = "ms";
+        }
+
+        span.innerText = `${parseFloat(performanceValues[key].toFixed(6))} ${unit}`;
       }
     }
   }
@@ -520,7 +527,8 @@ export class ParticleSimulation {
     } else {
       const cpuSimStart = performance.now();
       const stateArray = this.cpuSimulationStep();
-      performanceValues.CPUSimulationPassDuration = performance.now() - cpuSimStart;
+      performanceValues.CPUSimulationPassDuration =
+        performance.now() - cpuSimStart;
       this.device.queue.writeBuffer(
         this.particleStateStorage[step % 2],
         0,
@@ -576,11 +584,11 @@ export class ParticleSimulation {
 
         if (simulationPassDuration > 0 && renderPassDuration > 0) {
           performanceValues.GPUSimulationPassDuration = Math.round(
-            simulationPassDuration / 1000 / 1000
+            simulationPassDuration / 1000
           );
 
           performanceValues.renderPassDuration = Math.round(
-            renderPassDuration / 1000 / 1000
+            renderPassDuration / 1000
           );
         }
         resultBuffer.unmap();

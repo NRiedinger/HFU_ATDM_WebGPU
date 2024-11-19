@@ -2,6 +2,7 @@ import { computeShaderCode } from "./computeShader.js";
 
 const parameters = {
   iterations: 1_000_000,
+  numParallelCalculations: 100_000,
   seed: Math.floor(Math.random() * 9999),
 };
 
@@ -38,7 +39,9 @@ export async function run() {
   });
   device.queue.writeBuffer(uniformBuffer, 0, uniformValues);
 
-  const valueCount = 6400;
+  const startTime = performance.now();
+
+  const valueCount = parameters.numParallelCalculations;
   const valueArray = new Int32Array(valueCount);
   for (let i = 0; i < valueArray.length; i++) {
     valueArray[i] = 0;
@@ -62,6 +65,8 @@ export async function run() {
     ],
   });
 
+
+
   const commandEncoder = device.createCommandEncoder();
   const passEncoder = commandEncoder.beginComputePass();
 
@@ -78,7 +83,11 @@ export async function run() {
     resultBuffer.size
   );
 
+  
+
   device.queue.submit([commandEncoder.finish()]);
+
+  
 
   await resultBuffer.mapAsync(GPUMapMode.READ);
   const result = new Int32Array(resultBuffer.getMappedRange());
@@ -89,9 +98,23 @@ export async function run() {
   }
 
   const samples = valueCount * parameters.iterations;
+  const calcPi = 4.0 * (count / samples);
+
+  const duration = performance.now() - startTime;
 
   //console.log(result);
   console.log("count:", count);
   console.log("samples:", samples);
-  console.log("PI:", 4.0 * (count / samples));
+  console.log("My PI:", calcPi);
+  console.log("JS PI:", Math.PI);
+
+  const el = document.getElementById('result');
+  el.textContent = `\
+  samples in circle: ${count}
+  total samples: ${samples}
+  calculated PI: ${calcPi}
+  Math.PI:       ${Math.PI}
+
+  duration: ${duration.toFixed(0)} ms;
+  `;
 }
