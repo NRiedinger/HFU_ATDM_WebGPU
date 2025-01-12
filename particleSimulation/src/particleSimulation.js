@@ -9,8 +9,6 @@ const vertices = new Float32Array([
   0.0, 0.02
 ]);
 
-const canvas = document.querySelector("canvas");
-
 const parameters = {
   particleCount: 0,
   deltaTime: 0, // updated in render loop
@@ -33,22 +31,62 @@ const performanceValues = {
 let step = 0;
 
 export class ParticleSimulation {
-  constructor(particleCount, useGPU = true) {
+  constructor() {}
+
+  static getInstance() {
+    if (!this.instance) {
+      this.instance = new ParticleSimulation();
+    }
+
+    return this.instance;
+  }
+
+  run(particleCount, useGPU = true) {
+    this.canvas = document.getElementById("canvas-particles");
     this.particleCount = particleCount;
     parameters.particleCount = particleCount;
     this.useGPU = useGPU;
     console.log(`Using ${this.useGPU ? "GPU" : "CPU"}`);
 
-    this.setupUI();
+    /* this.setupUI(); */
 
-    this.setup().then(() => {
-      // start animation
+    if (!this.device) {
+      this.setupDevice().then(() => {
+        this.setupBuffers();
+        this.setupPipelines();
+        // start animation
+        this.lastAnimationTime = performance.now();
+        this.animationFrameId = requestAnimationFrame(this.frame.bind(ParticleSimulation.getInstance()));
+      });
+    } else {
+      this.clearBuffers();
+      this.setupBuffers();
+      this.setupPipelines();
+      cancelAnimationFrame(this.animationFrameId);
       this.lastAnimationTime = performance.now();
-      requestAnimationFrame(this.frame.bind(this));
-    });
+      this.animationFrameId = requestAnimationFrame(this.frame.bind(ParticleSimulation.getInstance()));
+    }
   }
 
-  async setup() {
+  clearBuffers() {
+    if (this.vertexBuffer) {
+      this.vertexBuffer.destroy();
+    }
+
+    if (this.uniformBuffer) {
+      this.uniformBuffer.destroy();
+    }
+
+    if (this.particleStateStorage[0]) {
+      this.particleStateStorage[0].destroy();
+    }
+
+    if (this.particleStateStorage[1]) {
+      this.particleStateStorage[1].destroy();
+    }
+  }
+
+  async setupDevice() {
     if (!navigator.gpu) {
       throw new Error("WebGPU not supported on this browser.");
     }
@@ -63,26 +101,68 @@ export class ParticleSimulation {
       requiredFeatures: this.hasTimestampQuery ? ["timestamp-query"] : [],
     });
 
-    this.context = canvas.getContext("webgpu");
-    const canvasFormat = navigator.gpu.getPreferredCanvasFormat();
+    this.context = this.canvas.getContext("webgpu");
+    this.canvasFormat = navigator.gpu.getPreferredCanvasFormat();
     this.context.configure({
       device: this.device,
-      format: canvasFormat,
+      format: this.canvasFormat,
     });
+  }
 
+  setupBuffers() {
     // define vertex buffer
     this.vertexBuffer = this.device.createBuffer({
       label: "Particle vertices",
       size: vertices.byteLength,
       usage: GPUBufferUsage.VERTEX | GPUBufferUsage.COPY_DST,
     });
+    this.device.queue.writeBuffer(this.vertexBuffer, /*bufferOffset=*/ 0, vertices);
 
-    this.device.queue.writeBuffer(
-      this.vertexBuffer,
-      /*bufferOffset=*/ 0,
-      vertices
-    );
+    // uniform buffer
+    const uniformBufferSize = Object.keys(parameters).length * Float32Array.BYTES_PER_ELEMENT;
+    this.uniformValues = new Float32Array([
+      parameters.deltaTime,
+      parameters.timeScale,
+      parameters.maxSpeed,
+      parameters.r1d,
+      parameters.r2d,
+      parameters.r3d,
+      parameters.r1s,
+      parameters.r2s,
+      parameters.r3s,
+    ]);
+    this.uniformBuffer = this.device.createBuffer({
+      label: "uniform buffer",
+      size: uniformBufferSize,
+      usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST,
+    });
+    this.device.queue.writeBuffer(this.uniformBuffer, 0, this.uniformValues);
 
+    // particle state buffers
+    this.particleStateArray = new Float32Array(this.particleCount * 4);
+    this.particleStateStorage = [
+      this.device.createBuffer({
+        label: "Particle state A",
+        size: this.particleStateArray.byteLength,
+        usage: GPUBufferUsage.VERTEX | GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST,
+      }),
+      this.device.createBuffer({
+        label: "Particle state B",
+        size: this.particleStateArray.byteLength,
+        usage: GPUBufferUsage.VERTEX | GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST,
+      }),
+    ];
+
+    for (let i = 0; i < this.particleStateArray.length; i += 4) {
+      this.particleStateArray[i] = 2 * (Math.random() - 0.5);
+      this.particleStateArray[i + 1] = 2 * (Math.random() - 0.5);
+      this.particleStateArray[i + 2] = 2 * (Math.random() - 0.5) * 0.1;
+      this.particleStateArray[i + 3] = 2 * (Math.random() - 0.5) * 0.1;
+    }
+    this.device.queue.writeBuffer(this.particleStateStorage[0], 0, this.particleStateArray);
+  }
+
+  setupPipelines() {
     this.renderPassDescriptor = {
       colorAttachments: [
         {
@@ -114,14 +194,51 @@ export class ParticleSimulation {
         },
         {
           binding: 2,
-          visibility:
-            GPUShaderStage.VERTEX |
-            GPUShaderStage.FRAGMENT |
-            GPUShaderStage.COMPUTE,
+          visibility: GPUShaderStage.VERTEX | GPUShaderStage.FRAGMENT | GPUShaderStage.COMPUTE,
           buffer: {}, // grid uniform buffer
         },
       ],
     });
+
+    // create bind group
+    this.bindGroups = [
+      this.device.createBindGroup({
+        label: "Cell renderer bind group A",
+        layout: bindGroupLayout,
+        entries: [
+          {
+            binding: 0,
+            resource: { buffer: this.particleStateStorage[0] },
+          },
+          {
+            binding: 1,
+            resource: { buffer: this.particleStateStorage[1] },
+          },
+          {
+            binding: 2,
+            resource: { buffer: this.uniformBuffer },
+          },
+        ],
+      }),
+      this.device.createBindGroup({
+        label: "Cell renderer bind group B",
+        layout: bindGroupLayout,
+        entries: [
+          {
+            binding: 0,
+            resource: { buffer: this.particleStateStorage[1] },
+          },
+          {
+            binding: 1,
+            resource: { buffer: this.particleStateStorage[0] },
+          },
+          {
+            binding: 2,
+            resource: { buffer: this.uniformBuffer },
+          },
+        ],
+      }),
+    ];
 
     const pipelineLayout = this.device.createPipelineLayout({
       label: "Particle Pipeline Layout",
@@ -172,103 +289,11 @@ export class ParticleSimulation {
         entryPoint: "fragmentMain",
         targets: [
           {
-            format: canvasFormat,
+            format: this.canvasFormat,
           },
         ],
       },
     });
-
-    // uniform buffer
-    const uniformBufferSize =
-      Object.keys(parameters).length * Float32Array.BYTES_PER_ELEMENT;
-    this.uniformValues = new Float32Array([
-      parameters.deltaTime,
-      parameters.timeScale,
-      parameters.maxSpeed,
-      parameters.r1d,
-      parameters.r2d,
-      parameters.r3d,
-      parameters.r1s,
-      parameters.r2s,
-      parameters.r3s,
-    ]);
-    this.uniformBuffer = this.device.createBuffer({
-      size: uniformBufferSize,
-      usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST,
-    });
-    this.device.queue.writeBuffer(this.uniformBuffer, 0, this.uniformValues);
-
-    this.particleStateArray = new Float32Array(this.particleCount * 4);
-    this.particleStateStorage = [
-      this.device.createBuffer({
-        label: "Particle state A",
-        size: this.particleStateArray.byteLength,
-        usage:
-          GPUBufferUsage.VERTEX |
-          GPUBufferUsage.STORAGE |
-          GPUBufferUsage.COPY_DST,
-      }),
-      this.device.createBuffer({
-        label: "Particle state B",
-        size: this.particleStateArray.byteLength,
-        usage:
-          GPUBufferUsage.VERTEX |
-          GPUBufferUsage.STORAGE |
-          GPUBufferUsage.COPY_DST,
-      }),
-    ];
-
-    for (let i = 0; i < this.particleStateArray.length; i += 4) {
-      this.particleStateArray[i] = 2 * (Math.random() - 0.5);
-      this.particleStateArray[i + 1] = 2 * (Math.random() - 0.5);
-      this.particleStateArray[i + 2] = 2 * (Math.random() - 0.5) * 0.1;
-      this.particleStateArray[i + 3] = 2 * (Math.random() - 0.5) * 0.1;
-    }
-    this.device.queue.writeBuffer(
-      this.particleStateStorage[0],
-      0,
-      this.particleStateArray
-    );
-
-    // create bind group
-    this.bindGroups = [
-      this.device.createBindGroup({
-        label: "Cell renderer bind group A",
-        layout: bindGroupLayout,
-        entries: [
-          {
-            binding: 0,
-            resource: { buffer: this.particleStateStorage[0] },
-          },
-          {
-            binding: 1,
-            resource: { buffer: this.particleStateStorage[1] },
-          },
-          {
-            binding: 2,
-            resource: { buffer: this.uniformBuffer },
-          },
-        ],
-      }),
-      this.device.createBindGroup({
-        label: "Cell renderer bind group B",
-        layout: bindGroupLayout,
-        entries: [
-          {
-            binding: 0,
-            resource: { buffer: this.particleStateStorage[1] },
-          },
-          {
-            binding: 1,
-            resource: { buffer: this.particleStateStorage[0] },
-          },
-          {
-            binding: 2,
-            resource: { buffer: this.uniformBuffer },
-          },
-        ],
-      }),
-    ];
 
     const simulationShaderModule = this.device.createShaderModule({
       label: "compute shader",
@@ -296,6 +321,7 @@ export class ParticleSimulation {
       });
 
       this.resolveBuffer = this.device.createBuffer({
+        label: "resolve buffer",
         size: 4 * BigInt64Array.BYTES_PER_ELEMENT,
         usage: GPUBufferUsage.QUERY_RESOLVE | GPUBufferUsage.COPY_SRC,
       });
@@ -318,14 +344,8 @@ export class ParticleSimulation {
     const resultStateArray = new Float32Array(this.particleCount * 4);
 
     for (let i = 0; i < this.particleCount; i++) {
-      let vPos = new Vector2(
-        this.particleStateArray[i * 4 + 0],
-        this.particleStateArray[i * 4 + 1]
-      );
-      let vVel = new Vector2(
-        this.particleStateArray[i * 4 + 2],
-        this.particleStateArray[i * 4 + 3]
-      );
+      let vPos = new Vector2(this.particleStateArray[i * 4 + 0], this.particleStateArray[i * 4 + 1]);
+      let vVel = new Vector2(this.particleStateArray[i * 4 + 2], this.particleStateArray[i * 4 + 3]);
 
       let cMass = new Vector2();
       let cVel = new Vector2();
@@ -340,14 +360,8 @@ export class ParticleSimulation {
           continue;
         }
 
-        pos = new Vector2(
-          this.particleStateArray[ii * 4 + 0],
-          this.particleStateArray[ii * 4 + 1]
-        );
-        vel = new Vector2(
-          this.particleStateArray[ii * 4 + 2],
-          this.particleStateArray[ii * 4 + 3]
-        );
+        pos = new Vector2(this.particleStateArray[ii * 4 + 0], this.particleStateArray[ii * 4 + 1]);
+        vel = new Vector2(this.particleStateArray[ii * 4 + 2], this.particleStateArray[ii * 4 + 3]);
 
         if (Vector2.distance(pos, vPos) < parameters.r1d) {
           cMass = cMass.add(pos);
@@ -372,21 +386,14 @@ export class ParticleSimulation {
         cVel = cVel.scale(1 / cVelCount);
       }
 
-      vVel = vVel
-        .add(cMass.scale(parameters.r1s))
-        .add(colVel.scale(parameters.r2s))
-        .add(cVel.scale(parameters.r3s));
+      vVel = vVel.add(cMass.scale(parameters.r1s)).add(colVel.scale(parameters.r2s)).add(cVel.scale(parameters.r3s));
 
       // clamp velocity
       const vVelLen = vVel.length();
-      vVel = Vector2.normalize(vVel).scale(
-        Math.min(Math.max(vVelLen, 0.0), parameters.maxSpeed)
-      );
+      vVel = Vector2.normalize(vVel).scale(Math.min(Math.max(vVelLen, 0.0), parameters.maxSpeed));
 
       // kinematic update
-      vPos = vPos.add(
-        vVel.scale(parameters.deltaTime).scale(parameters.timeScale)
-      );
+      vPos = vPos.add(vVel.scale(parameters.deltaTime).scale(parameters.timeScale));
 
       // wrap around boundary
       if (vPos.x < -1.0) {
@@ -499,16 +506,14 @@ export class ParticleSimulation {
       }
     }
 
-    setInterval(this.updateUI, 100);
+    setInterval(this.updateUI, 500);
   }
 
   frame() {
     parameters.deltaTime = (performance.now() - this.lastAnimationTime) / 1000;
     this.lastAnimationTime = performance.now();
 
-    this.renderPassDescriptor.colorAttachments[0].view = this.context
-      .getCurrentTexture()
-      .createView();
+    this.renderPassDescriptor.colorAttachments[0].view = this.context.getCurrentTexture().createView();
 
     this.uniformValues.set([parameters.deltaTime], 0);
     this.device.queue.writeBuffer(this.uniformBuffer, 0, this.uniformValues);
@@ -517,9 +522,7 @@ export class ParticleSimulation {
 
     if (this.useGPU) {
       // compute pass
-      const pass = commandEncoder.beginComputePass(
-        this.simulationPassDescriptor
-      );
+      const pass = commandEncoder.beginComputePass(this.simulationPassDescriptor);
       pass.setPipeline(this.simulationPipeline);
       pass.setBindGroup(0, this.bindGroups[step % 2]);
       pass.dispatchWorkgroups(Math.ceil(this.particleCount / 64), 1, 1);
@@ -527,13 +530,8 @@ export class ParticleSimulation {
     } else {
       const cpuSimStart = performance.now();
       const stateArray = this.cpuSimulationStep();
-      performanceValues.CPUSimulationPassDuration =
-        performance.now() - cpuSimStart;
-      this.device.queue.writeBuffer(
-        this.particleStateStorage[step % 2],
-        0,
-        stateArray
-      );
+      performanceValues.CPUSimulationPassDuration = performance.now() - cpuSimStart;
+      this.device.queue.writeBuffer(this.particleStateStorage[step % 2], 0, stateArray);
       this.particleStateArray = stateArray;
     }
 
@@ -549,47 +547,32 @@ export class ParticleSimulation {
     }
 
     let resultBuffer;
-    if (this.hasTimestampQuery) {
+    if (this.useGPU && this.hasTimestampQuery) {
       resultBuffer =
         this.spareResultBuffers.pop() ||
         this.device.createBuffer({
+          label: "result buffer",
           size: 4 * BigInt64Array.BYTES_PER_ELEMENT,
           usage: GPUBufferUsage.COPY_DST | GPUBufferUsage.MAP_READ,
         });
 
-      commandEncoder.resolveQuerySet(
-        this.querySet,
-        0,
-        4,
-        this.resolveBuffer,
-        0
-      );
-      commandEncoder.copyBufferToBuffer(
-        this.resolveBuffer,
-        0,
-        resultBuffer,
-        0,
-        resultBuffer.size
-      );
+      commandEncoder.resolveQuerySet(this.querySet, 0, 4, this.resolveBuffer, 0);
+      commandEncoder.copyBufferToBuffer(this.resolveBuffer, 0, resultBuffer, 0, resultBuffer.size);
     }
 
     // Finish the command buffer and immediately submit it.
     this.device.queue.submit([commandEncoder.finish()]);
 
-    if (this.hasTimestampQuery) {
+    if (this.useGPU && this.hasTimestampQuery) {
       resultBuffer.mapAsync(GPUMapMode.READ).then(() => {
         const timestamps = new BigInt64Array(resultBuffer.getMappedRange());
         const simulationPassDuration = Number(timestamps[1] - timestamps[0]);
         const renderPassDuration = Number(timestamps[3] - timestamps[2]);
 
         if (simulationPassDuration > 0 && renderPassDuration > 0) {
-          performanceValues.GPUSimulationPassDuration = Math.round(
-            simulationPassDuration / 1000
-          );
+          performanceValues.GPUSimulationPassDuration = Math.round(simulationPassDuration / 1000);
 
-          performanceValues.renderPassDuration = Math.round(
-            renderPassDuration / 1000
-          );
+          performanceValues.renderPassDuration = Math.round(renderPassDuration / 1000);
         }
         resultBuffer.unmap();
 
@@ -599,6 +582,6 @@ export class ParticleSimulation {
 
     step++;
 
-    requestAnimationFrame(this.frame.bind(this));
+    this.animationFrameId = requestAnimationFrame(this.frame.bind(this));
   }
 }

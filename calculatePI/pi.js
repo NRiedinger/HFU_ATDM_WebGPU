@@ -139,6 +139,8 @@ export async function run() {
         } µs`;
       }
 
+      console.log(computePassDuration / 1000)
+
       timestampResultBuffer.unmap();
       spareResultBuffers.push(timestampResultBuffer);
     });

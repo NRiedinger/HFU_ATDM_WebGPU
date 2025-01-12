@@ -1,0 +1,17 @@
+.ParticleSimulationPage__Container {
+  display: flex;
+  flex-direction: row;
+}
+
+.ParticleSimulationPage__Container__UI {
+  width: 20em;
+}
+
+.ParticleSimulationPage__Container__UI > * {
+  margin: 1em 0;
+}
+
+.p-dropdown,
+.p-inputnumber {
+  width: 100%;
+}
