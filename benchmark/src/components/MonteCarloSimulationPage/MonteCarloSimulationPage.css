@@ -1,0 +1,13 @@
+.MonteCarloSimulationPage__Container {
+  display: flex;
+  flex-direction: row;
+}
+
+.p-float-label {
+  margin: 1em 0.5em;
+}
+
+.MonteCarloSimulationPage__ResultSingle__Container {
+  display: flex;
+  flex-direction: column;
+}

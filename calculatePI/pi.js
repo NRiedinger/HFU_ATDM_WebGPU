@@ -1,25 +1,49 @@
 import { computeShaderCode } from "./computeShader.js";
 
-const parameters = {
-  iterations: 1_000_000,
-  numParallelCalculations: 64_000,
-  seed: Math.floor(Math.random() * Number.MAX_SAFE_INTEGER),
-};
+let adapter;
+let device;
+let hasTimestampQuery;
 
-export async function run() {
+export async function run(numGPUPasses, numIterations, numGPUThreads) {
   if (!navigator.gpu) {
     throw new Error("WebGPU is not supported on this browser");
   }
 
-  const adapter = await navigator.gpu.requestAdapter();
+  adapter = await navigator.gpu.requestAdapter();
   if (!adapter) {
     throw new Error("No appropriate GPU adapter found.");
   }
 
-  const hasTimestampQuery = adapter.features.has("timestamp-query");
-  const device = await adapter.requestDevice({
+  hasTimestampQuery = adapter.features.has("timestamp-query");
+  device = await adapter.requestDevice({
     requiredFeatures: hasTimestampQuery ? ["timestamp-query"] : [],
   });
+
+  const result = {
+    totalSamples: 0,
+    positiveSamples: 0,
+    pi: 0,
+  };
+
+  for (let i = 0; i < numGPUPasses; i++) {
+    const passResult = await runGPUPass(numIterations, numGPUThreads);
+    result.totalSamples += passResult.totalSamples;
+    result.positiveSamples += passResult.positiveSamples;
+  }
+
+  if (result.totalSamples > 0) {
+    result.pi = 4.0 * (result.positiveSamples / result.totalSamples);
+  }
+
+  return result;
+}
+
+async function runGPUPass(numIterations, numGPUThreads) {
+  const parameters = {
+    iterations: numIterations,
+    numParallelCalculations: numGPUThreads,
+    seed: Math.floor(Math.random() * Number.MAX_SAFE_INTEGER),
+  };
 
   const computePipeline = device.createComputePipeline({
     label: "compute pipeline",
@@ -42,6 +66,7 @@ export async function run() {
     });
 
     resolveBuffer = device.createBuffer({
+      label: "resolve buffer",
       size: 2 * BigInt64Array.BYTES_PER_ELEMENT,
       usage: GPUBufferUsage.QUERY_RESOLVE | GPUBufferUsage.COPY_SRC,
     });
@@ -58,6 +83,7 @@ export async function run() {
     parameters.seed,
   ]);
   const uniformBuffer = device.createBuffer({
+    label: "uniform buffer",
     size: uniformValues.byteLength,
     usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST,
   });
@@ -70,11 +96,13 @@ export async function run() {
   }
 
   const computeBuffer = device.createBuffer({
+    label: "compute buffer",
     size: valueArray.byteLength,
     usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_SRC,
   });
 
   const computeResultBuffer = device.createBuffer({
+    label: "compute result buffer",
     size: valueArray.byteLength,
     usage: GPUBufferUsage.MAP_READ | GPUBufferUsage.COPY_DST,
   });
@@ -110,6 +138,7 @@ export async function run() {
     timestampResultBuffer =
       spareResultBuffers.pop() ||
       device.createBuffer({
+        label: "timestamp result buffer",
         size: 2 * BigInt64Array.BYTES_PER_ELEMENT,
         usage: GPUBufferUsage.COPY_DST | GPUBufferUsage.MAP_READ,
       });
@@ -132,14 +161,14 @@ export async function run() {
       const computePassDuration = Number(times[1] - times[0]);
 
       if (computePassDuration > 0) {
-        document.getElementById(
+        /* document.getElementById(
           "result_GPUtime"
         ).textContent = `compute pass duration: ${
           computePassDuration / 1000
-        } µs`;
+        } µs`; */
       }
 
-      console.log(computePassDuration / 1000)
+      /* console.log(computePassDuration / 1000); */
 
       timestampResultBuffer.unmap();
       spareResultBuffers.push(timestampResultBuffer);
@@ -149,28 +178,33 @@ export async function run() {
   await computeResultBuffer.mapAsync(GPUMapMode.READ);
   const result = new Int32Array(computeResultBuffer.getMappedRange());
 
-  let count = 0;
+  let positiveSamples = 0;
   for (let i = 0; i < result.length; i++) {
-    count += result[i];
+    positiveSamples += result[i];
   }
 
-  const samples = valueCount * parameters.iterations;
-  const calcPi = 4.0 * (count / samples);
+  const totalSamples = valueCount * parameters.iterations;
+  /* const calcPi = 4.0 * (positiveSamples / totalSamples); */
 
   const duration = performance.now() - startTime;
 
   //console.log(result);
-  console.log("count:", count);
+  /* console.log("count:", count);
   console.log("samples:", samples);
   console.log("My PI:", calcPi);
-  console.log("JS PI:", Math.PI);
+  console.log("JS PI:", Math.PI); */
 
-  document.getElementById("result").textContent = `\
+  /*   document.getElementById("result").textContent = `\
 samples in circle: ${count}
 total samples:     ${samples}
 
 calculated PI: ${calcPi}
 Math.PI:       ${Math.PI}
 
-Javascript duration:   ${duration.toFixed(0)} ms`;
+Javascript duration:   ${duration.toFixed(0)} ms`; */
+
+  return {
+    positiveSamples: positiveSamples,
+    totalSamples: totalSamples,
+  };
 }
