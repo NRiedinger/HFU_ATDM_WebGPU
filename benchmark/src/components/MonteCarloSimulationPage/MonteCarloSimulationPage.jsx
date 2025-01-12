@@ -6,36 +6,70 @@ import { Divider } from "primereact/divider";
 import { FloatLabel } from "primereact/floatlabel";
 import { InputNumber } from "primereact/inputnumber";
 import { Button } from "primereact/Button";
+import { DataTable } from "primereact/datatable";
+import { Column } from "primereact/column";
+import { ProgressSpinner } from "primereact/progressspinner";
 
 const MonteCarloSimulationPage = () => {
   const [numGPUPasses, setNumGPUPasses] = useState(1);
-  const [numIterations, setNumIterations] = useState(1_000_000);
+  const [numIterations, setNumIterations] = useState(10_000);
   const [numGPUThreads, setNumGPUThreads] = useState(64_000);
 
   const [showResultSingle, setShowResultSingle] = useState(false);
-  const [resultSingleTotalSamples, setResultSingleTotalSamples] = useState();
-  const [resultSinglePositiveSamples, setResultSinglePositiveSamples] =
-    useState();
-  const [resultSinglePI, setResultSinglePI] = useState();
+  const [resultSingleLoading, setResultSingleLoading] = useState(false);
+  const [resultsSingle, setResultsSingle] = useState([]);
 
   const onRunSingle = () => {
     setShowResultSingle(false);
+    setResultSingleLoading(true);
     run(numGPUPasses, numIterations, numGPUThreads).then((result) => {
-      setResultSingleTotalSamples(result.totalSamples);
-      setResultSinglePositiveSamples(result.positiveSamples);
-      setResultSinglePI(result.pi);
+      const results = [
+        {
+          name: "Total Samples",
+          value: result.totalSamples.toLocaleString(),
+        },
+        {
+          name: "Positive Samples",
+          value: result.positiveSamples.toLocaleString(),
+        },
+        {
+          name: "Calculated PI",
+          value: result.pi.toFixed(15),
+        },
+        {
+          name: "Math.PI",
+          value: Math.PI.toFixed(15),
+        },
+        {
+          name: "Difference",
+          value:
+            (
+              100 *
+              Math.abs((result.pi - Math.PI) / ((result.pi + Math.PI) / 2))
+            ).toFixed(10) + " %",
+        },
+        {
+          name: "Total Duration",
+          value: result.duration.toFixed(2) + " ms",
+        },
+        {
+          name: "Compute Pass Duration",
+          value: result.computePassDuration.toFixed(5) + " ms",
+        },
+      ];
+      setResultsSingle(results);
+
       setShowResultSingle(true);
+      setResultSingleLoading(false);
     });
   };
 
   const renderResultSingle = () => {
     return (
-      <div className="MonteCarloSimulationPage__ResultSingle__Container">
-        <span>Total Samples: {resultSingleTotalSamples}</span>
-        <span>Positive Samples: {resultSinglePositiveSamples}</span>
-        <span>Calculated PI: {resultSinglePI}</span>
-        <span>Math.PI: {Math.PI}</span>
-      </div>
+      <DataTable showHeaders={false} value={resultsSingle}>
+        <Column field="name" header="Name" />
+        <Column field="value" header="Value" />
+      </DataTable>
     );
   };
 
@@ -49,6 +83,7 @@ const MonteCarloSimulationPage = () => {
             <InputNumber
               inputId="input-gpupasses"
               min={1}
+              allowEmpty={false}
               value={numGPUPasses}
               onValueChange={(e) => setNumGPUPasses(e.value)}
             />
@@ -59,6 +94,7 @@ const MonteCarloSimulationPage = () => {
             <InputNumber
               inputId="input-gputhreads"
               min={1}
+              allowEmpty={false}
               value={numGPUThreads}
               onValueChange={(e) => setNumGPUThreads(e.value)}
             />
@@ -69,6 +105,7 @@ const MonteCarloSimulationPage = () => {
             <InputNumber
               inputId="input-iterations"
               min={1}
+              allowEmpty={false}
               value={numIterations}
               onValueChange={(e) => setNumIterations(e.value)}
             />
@@ -81,7 +118,13 @@ const MonteCarloSimulationPage = () => {
 
           <Divider />
 
-          {showResultSingle ? renderResultSingle() : null}
+          <div className="MonteCarloSimulationPage__ResultSingle__Container">
+            {showResultSingle ? (
+              renderResultSingle()
+            ) : resultSingleLoading ? (
+              <ProgressSpinner />
+            ) : null}
+          </div>
         </div>
         <Divider layout="vertical" />
       </div>

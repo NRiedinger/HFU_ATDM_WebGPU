@@ -5,6 +5,12 @@ let device;
 let hasTimestampQuery;
 
 export async function run(numGPUPasses, numIterations, numGPUThreads) {
+  if (numIterations * numGPUThreads > 4_294_967_295) {
+    console.warn(
+      "numIterations * numGPUThreads is exceeding maximum u32 value and results might be wrong"
+    );
+  }
+
   if (!navigator.gpu) {
     throw new Error("WebGPU is not supported on this browser");
   }
@@ -23,13 +29,21 @@ export async function run(numGPUPasses, numIterations, numGPUThreads) {
     totalSamples: 0,
     positiveSamples: 0,
     pi: 0,
+    duration: 0,
+    computePassDuration: 0,
   };
+
+  const startTime = performance.now();
 
   for (let i = 0; i < numGPUPasses; i++) {
     const passResult = await runGPUPass(numIterations, numGPUThreads);
     result.totalSamples += passResult.totalSamples;
     result.positiveSamples += passResult.positiveSamples;
+    result.computePassDuration += passResult.computePassDuration;
   }
+
+  const duration = performance.now() - startTime;
+  result.duration = duration;
 
   if (result.totalSamples > 0) {
     result.pi = 4.0 * (result.positiveSamples / result.totalSamples);
@@ -89,40 +103,35 @@ async function runGPUPass(numIterations, numGPUThreads) {
   });
   device.queue.writeBuffer(uniformBuffer, 0, uniformValues);
 
-  const valueCount = parameters.numParallelCalculations;
-  const valueArray = new Int32Array(valueCount);
-  for (let i = 0; i < valueArray.length; i++) {
-    valueArray[i] = 0;
-  }
-
+  // test
+  const sumValue = new Uint32Array(1);
   const computeBuffer = device.createBuffer({
     label: "compute buffer",
-    size: valueArray.byteLength,
+    size: sumValue.byteLength,
     usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_SRC,
   });
-
   const computeResultBuffer = device.createBuffer({
     label: "compute result buffer",
-    size: valueArray.byteLength,
+    size: sumValue.byteLength,
     usage: GPUBufferUsage.MAP_READ | GPUBufferUsage.COPY_DST,
   });
 
   const bindGroup = device.createBindGroup({
     layout: computePipeline.getBindGroupLayout(0),
     entries: [
-      { binding: 0, resource: { buffer: computeBuffer } },
-      { binding: 1, resource: { buffer: uniformBuffer } },
+      { binding: 0, resource: { buffer: uniformBuffer } },
+      { binding: 1, resource: { buffer: computeBuffer } },
     ],
   });
-
-  const startTime = performance.now();
 
   const commandEncoder = device.createCommandEncoder();
   const passEncoder = commandEncoder.beginComputePass(computePassDescriptor);
 
   passEncoder.setPipeline(computePipeline);
   passEncoder.setBindGroup(0, bindGroup);
-  passEncoder.dispatchWorkgroups(Math.ceil(valueCount / 64));
+  passEncoder.dispatchWorkgroups(
+    Math.ceil(parameters.numParallelCalculations / 64)
+  );
   passEncoder.end();
 
   commandEncoder.copyBufferToBuffer(
@@ -155,56 +164,37 @@ async function runGPUPass(numIterations, numGPUThreads) {
 
   device.queue.submit([commandEncoder.finish()]);
 
+  let computePassDuration = 0;
   if (hasTimestampQuery) {
-    timestampResultBuffer.mapAsync(GPUMapMode.READ).then(() => {
-      const times = new BigInt64Array(timestampResultBuffer.getMappedRange());
-      const computePassDuration = Number(times[1] - times[0]);
+    await timestampResultBuffer.mapAsync(GPUMapMode.READ);
+    const times = new BigInt64Array(timestampResultBuffer.getMappedRange());
+    computePassDuration = Number(times[1] - times[0]);
 
-      if (computePassDuration > 0) {
-        /* document.getElementById(
+    if (computePassDuration > 0) {
+      /* document.getElementById(
           "result_GPUtime"
         ).textContent = `compute pass duration: ${
           computePassDuration / 1000
         } µs`; */
-      }
+    }
 
-      /* console.log(computePassDuration / 1000); */
+    /* console.log(computePassDuration / 1000); */
 
-      timestampResultBuffer.unmap();
-      spareResultBuffers.push(timestampResultBuffer);
-    });
+    timestampResultBuffer.unmap();
+    spareResultBuffers.push(timestampResultBuffer);
   }
 
   await computeResultBuffer.mapAsync(GPUMapMode.READ);
   const result = new Int32Array(computeResultBuffer.getMappedRange());
 
-  let positiveSamples = 0;
-  for (let i = 0; i < result.length; i++) {
-    positiveSamples += result[i];
-  }
+  let positiveSamples = result[0];
 
-  const totalSamples = valueCount * parameters.iterations;
-  /* const calcPi = 4.0 * (positiveSamples / totalSamples); */
-
-  const duration = performance.now() - startTime;
-
-  //console.log(result);
-  /* console.log("count:", count);
-  console.log("samples:", samples);
-  console.log("My PI:", calcPi);
-  console.log("JS PI:", Math.PI); */
-
-  /*   document.getElementById("result").textContent = `\
-samples in circle: ${count}
-total samples:     ${samples}
-
-calculated PI: ${calcPi}
-Math.PI:       ${Math.PI}
-
-Javascript duration:   ${duration.toFixed(0)} ms`; */
+  const totalSamples =
+    parameters.numParallelCalculations * parameters.iterations;
 
   return {
     positiveSamples: positiveSamples,
     totalSamples: totalSamples,
+    computePassDuration: computePassDuration / 1000 / 1000,
   };
 }

@@ -4,8 +4,8 @@ struct UniformParameter {
   seed: i32,
 }
 
-@group(0) @binding(0) var<storage, read_write> values: array<u32>;
-@group(0) @binding(1) var<uniform> params: UniformParameter;
+@group(0) @binding(0) var<uniform> params: UniformParameter;
+@group(0) @binding(1) var<storage, read_write> sumValue: array<atomic<u32>>;
 
 // https://en.wikipedia.org/wiki/Linear_congruential_generator
 fn lcg(seed: ptr<function, u32>) -> f32 {
@@ -30,10 +30,12 @@ fn generate_random_pair(seed1: i32, seed2: i32, seed3: i32) -> vec2<f32> {
 fn main(@builtin(global_invocation_id) globalInvocationId: vec3u) {
   let id = i32(globalInvocationId.x);
 
+  var count: u32 = 0;
   for(var i = 0; i < params.iterations; i++) {
     let coords = generate_random_pair(id, i, params.seed);
-    values[id] += 1 - u32(coords.x * coords.x + coords.y * coords.y);
+    count += 1 - u32(coords.x * coords.x + coords.y * coords.y);
   }
 
+  atomicAdd(&sumValue[0], count);
 }
 `;
