@@ -1,0 +1,24 @@
+.MonteCarloSimulationMulti__Container {
+  display: flex;
+  flex-direction: row;
+}
+
+.MonteCarloSimulationMulti__Chart {
+  flex-grow: 1;
+  display: flex;
+  justify-content: center;
+  align-items: center;
+}
+
+.p-chart {
+  width: 100%;
+  height: 100%;
+}
+
+.p-progressbar {
+  width: 100%;
+  height: 1em;
+  margin: 0 1em;
+}
+
+

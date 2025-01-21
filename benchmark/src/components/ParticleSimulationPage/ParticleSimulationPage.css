@@ -15,3 +15,18 @@
 .p-inputnumber {
   width: 100%;
 }
+
+
+.ui-row {
+  display: flex;
+  flex-direction: row;
+  justify-content: space-between;
+  padding: 3px 10px;
+}
+
+.ui-row-title {
+  margin: 10px 5px;
+  text-align: left;
+  font-weight: bold;
+  text-decoration: underline;
+}

@@ -46,9 +46,9 @@ export class ParticleSimulation {
     this.particleCount = particleCount;
     parameters.particleCount = particleCount;
     this.useGPU = useGPU;
-    console.log(`Using ${this.useGPU ? "GPU" : "CPU"}`);
+    /* console.log(`Using ${this.useGPU ? "GPU" : "CPU"}`); */
 
-    /* this.setupUI(); */
+    this.setupUI();
 
     if (!this.device) {
       this.setupDevice().then(() => {

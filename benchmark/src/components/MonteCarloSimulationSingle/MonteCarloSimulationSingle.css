@@ -1,0 +1,8 @@
+.p-float-label {
+  margin: 1em 0.5em;
+}
+
+.MonteCarloSimulationSingle__Result__Container {
+  display: flex;
+  flex-direction: column;
+}

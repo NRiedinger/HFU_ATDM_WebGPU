@@ -4,7 +4,13 @@ let adapter;
 let device;
 let hasTimestampQuery;
 
-export async function run(numGPUPasses, numIterations, numGPUThreads) {
+export async function runGPUbySamples(numSamples, numGPUThreads) {
+  const iterations = numSamples / numGPUThreads;
+  return runGPU(1, iterations, numGPUThreads);
+}
+
+export async function runGPU(numGPUPasses, numIterations, numGPUThreads) {
+
   if (numIterations * numGPUThreads > 4_294_967_295) {
     console.warn(
       "numIterations * numGPUThreads is exceeding maximum u32 value and results might be wrong"
@@ -197,4 +203,27 @@ async function runGPUPass(numIterations, numGPUThreads) {
     totalSamples: totalSamples,
     computePassDuration: computePassDuration / 1000 / 1000,
   };
+}
+
+export async function runCPU(numIterations) {
+
+  const startTime = performance.now();
+
+  let count = 0;
+  for(let i = 0; i < numIterations; i++) {
+    const x = Math.random();
+    const y = Math.random();
+    if(x * x + y * y <= 1.0) {
+      count++;
+    }
+  }
+
+  const duration = performance.now() - startTime;
+
+  return {
+    totalSamples: numIterations,
+    positiveSamples: count,
+    pi: 4.0 * (count / numIterations),
+    duration: duration,
+  }
 }

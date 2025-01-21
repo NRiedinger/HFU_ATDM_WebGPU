@@ -3,15 +3,12 @@
   flex-direction: row;
 }
 
-.p-float-label {
-  margin: 1em 0.5em;
-}
-
-.MonteCarloSimulationPage__ResultSingle__Container {
-  display: flex;
-  flex-direction: column;
-}
-
 .MonteCarloSimulationPage__Container__Column {
-  width: 25em;
+  min-width: 25em;
 }
+
+.MonteCarloSimulationPage__Container__Column.Multi {
+  flex-grow: 1;
+}
+
+
