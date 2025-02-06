@@ -1,0 +1,53 @@
+<!DOCTYPE html>
+
+<html>
+  <head>
+    <meta charset="utf-8" />
+    <title>ATDM WebGPU</title>
+
+    <style>
+      .container {
+        display: flex;
+        flex-direction: row;
+        align-items: stretch;
+      }
+
+      .ui-container {
+        width: 400px;
+        background-color: rgb(50, 50, 50);
+      }
+
+      .ui-row {
+        display: flex;
+        flex-direction: row;
+        justify-content: space-between;
+        padding: 3px 10px;
+      }
+
+      .ui-row-title {
+        margin: 10px 5px;
+        text-align: left;
+        font-weight: bold;
+        text-decoration: underline;
+      }
+    </style>
+  </head>
+  <body>
+    <div class="container">
+      <canvas width="800" height="800"></canvas>
+      <div class="ui-container">
+        <div class="ui-row-title">Parameters</div>
+        <div id="ui-parameters-container"></div>
+        <div class="ui-row-title">Timings</div>
+        <div id="ui-performance-container"></div>
+      </div>
+    </div>
+
+    <script type="module">
+      "use strict";
+      import { ParticleSimulation } from "./src/particleSimulation.js";
+
+      const particleSimulation = new ParticleSimulation(5000, true);
+    </script>
+  </body>
+</html>

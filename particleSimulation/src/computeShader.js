@@ -6,12 +6,14 @@ struct ParticleState {
 
 struct UniformParameter {
   deltaTime: f32,
+  timeScale: f32,
+  maxSpeed: f32,
   r1d: f32,
   r2d: f32,
   r3d: f32,
   r1s: f32,
   r2s: f32,
-  r3s: f32,
+  r3s: f32
 };
 
 @group(0) @binding(0) var<storage> particleStatesIn: array<ParticleState>;
@@ -70,10 +72,10 @@ fn computeMain(@builtin(global_invocation_id) id: vec3u) {
   vVel += (cMass * params.r1s) + (colVel * params.r2s) + (cVel * params.r3s);
 
   // clamp velocity
-  vVel = normalize(vVel) * clamp(length(vVel), 0.0, 0.1);
+  vVel = normalize(vVel) * clamp(length(vVel), 0.0, params.maxSpeed);
 
   // kinematic update
-  vPos = vPos + (vVel * params.deltaTime);
+  vPos = vPos + (vVel * params.deltaTime * params.timeScale);
 
   // wrap around boundary
   if(vPos.x < -1.0) {

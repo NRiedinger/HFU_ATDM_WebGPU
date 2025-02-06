@@ -1,0 +1,28 @@
+<!DOCTYPE html>
+
+<html>
+  <head>
+    <meta charset="utf-8" />
+    <title>ATDM WebGPU</title>
+
+    <style>
+      #result,
+      #result_GPUtime {
+        white-space: pre; 
+        font-family: monospace, monospace;
+        font-size: 32px;
+        margin: 0 10px;
+      }
+    </style>
+  </head>
+  <body>
+    <div id="result"></div>
+    <div id="result_GPUtime"></div>
+    <script type="module">
+      "use strict";
+      import { run } from "./pi.js";
+
+      run();
+    </script>
+  </body>
+</html>

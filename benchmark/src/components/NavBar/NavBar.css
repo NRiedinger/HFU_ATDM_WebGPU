@@ -1,0 +1,8 @@
+.NavBar__Buttons {
+  display: flex;
+  flex-direction: row;
+}
+
+.NavBar__Buttons > * {
+  margin-right: 0.5em;
+}

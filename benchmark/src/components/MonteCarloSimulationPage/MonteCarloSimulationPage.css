@@ -1,0 +1,14 @@
+.MonteCarloSimulationPage__Container {
+  display: flex;
+  flex-direction: row;
+}
+
+.MonteCarloSimulationPage__Container__Column {
+  min-width: 25em;
+}
+
+.MonteCarloSimulationPage__Container__Column.Multi {
+  flex-grow: 1;
+}
+
+
