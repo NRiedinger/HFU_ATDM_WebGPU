@@ -21,4 +21,16 @@
   margin: 0 1em;
 }
 
+.MonteCarloSimulationMulti__UI__Checkboxes {
+  display: flex;
+  flex-direction: row;
+}
 
+.MonteCarloSimulationMulti__UI__Checkboxes > * {
+  margin-right: 1em;
+}
+
+
+.MonteCarloSimulationMulti__UI__Checkboxes > div > * {
+  margin: 0 .5em;
+}

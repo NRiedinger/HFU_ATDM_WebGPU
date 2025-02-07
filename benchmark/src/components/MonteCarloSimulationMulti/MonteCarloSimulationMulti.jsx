@@ -5,6 +5,7 @@ import { Divider } from "primereact/divider";
 import { FloatLabel } from "primereact/floatlabel";
 import { InputNumber } from "primereact/inputnumber";
 import { Button } from "primereact/Button";
+import { Checkbox } from "primereact/checkbox";
 import { ProgressSpinner } from "primereact/progressspinner";
 import { ProgressBar } from "primereact/progressbar";
 import { Chart } from "primereact/chart";
@@ -50,6 +51,8 @@ const options = {
 };
 
 const MonteCarloSimulationMulti = () => {
+  const [testGPU, setTestGPU] = useState(true);
+  const [testCPU, setTestCPU] = useState(true);
   const [numSampleSteps, setNumSampleSteps] = useState(10);
   const [sampleStepSize, setSampleStepSize] = useState(6_400_000);
   const [numTestRunsPerSampleStep, setNumTestRunsPerSampleStep] = useState(5);
@@ -71,48 +74,54 @@ const MonteCarloSimulationMulti = () => {
       const durationsCPU = [];
       const durationsGPU = [];
       const numSamples = step * sampleStepSize;
-      console.log(
-        `Running ${step} / ${numSampleSteps} (${numSamples.toLocaleString()} samples)`
-      );
+      console.log(`Running ${step} / ${numSampleSteps} (${numSamples.toLocaleString()} samples)`);
 
       for (let i = 0; i < numTestRunsPerSampleStep; i++) {
-        const resultCPU = await runCPU(numSamples);
-        const resultGPU = await runGPUbySamples(numSamples, numGPUThreads);
+        if (testGPU) {
+          const resultGPU = await runGPUbySamples(numSamples, numGPUThreads);
+          durationsGPU.push(resultGPU.duration);
+        }
 
-        durationsCPU.push(resultCPU.duration);
-        durationsGPU.push(resultGPU.duration);
+        if (testCPU) {
+          const resultCPU = await runCPU(numSamples);
+          durationsCPU.push(resultCPU.duration);
+        }
       }
 
       setProgress((step / numSampleSteps) * 100);
-
       valuesSamples.push(numSamples.toLocaleString());
-      valuesCPU.push(
-        durationsCPU.reduce((a, b) => a + b, 0) / numTestRunsPerSampleStep
-      );
-      valuesGPU.push(
-        durationsGPU.reduce((a, b) => a + b, 0) / numTestRunsPerSampleStep
-      );
+
+      if (testGPU) {
+        valuesGPU.push(durationsGPU.reduce((a, b) => a + b, 0) / numTestRunsPerSampleStep);
+      }
+      if (testCPU) {
+        valuesCPU.push(durationsCPU.reduce((a, b) => a + b, 0) / numTestRunsPerSampleStep);
+      }
     }
 
     const data = {
       labels: valuesSamples,
-      datasets: [
-        {
-          label: "CPU",
-          data: valuesCPU,
-          fill: false,
-          borderColor: "#3B82EF",
-          tension: 0.4,
-        },
-        {
-          label: "GPU",
-          data: valuesGPU,
-          fill: false,
-          borderColor: "#F54696",
-          tension: 0.4,
-        },
-      ],
+      datasets: [],
     };
+
+    if (testGPU) {
+      data.datasets.push({
+        label: "GPU",
+        data: valuesGPU,
+        fill: false,
+        borderColor: "#F54696",
+        tension: 0.4,
+      });
+    }
+    if (testCPU) {
+      data.datasets.push({
+        label: "CPU",
+        data: valuesCPU,
+        fill: false,
+        borderColor: "#3B82EF",
+        tension: 0.4,
+      });
+    }
 
     setChartData(data);
     setChartOptions(options);
@@ -127,6 +136,18 @@ const MonteCarloSimulationMulti = () => {
 
       <div className="MonteCarloSimulationMulti__Container">
         <div className="MonteCarloSimulationMulti__UI">
+          <div className="MonteCarloSimulationMulti__UI__Checkboxes">
+            <div>
+              <Checkbox inputId="runGPU-checkbox" onChange={(e) => setTestGPU(e.checked)} checked={testGPU} />
+              <label htmlFor="runGPU-checkbox">GPU</label>
+            </div>
+
+            <div>
+              <Checkbox inputId="runCPU-checkbox" onChange={(e) => setTestCPU(e.checked)} checked={testCPU} />
+              <label htmlFor="runCPU-checkbox">CPU</label>
+            </div>
+          </div>
+
           <FloatLabel>
             <InputNumber
               inputId="input-numsamplesteps"
@@ -157,9 +178,7 @@ const MonteCarloSimulationMulti = () => {
               value={numTestRunsPerSampleStep}
               onValueChange={(e) => setNumTestRunsPerSampleStep(e.value)}
             />
-            <label htmlFor="input-runspersamplestep">
-              Durchläufe pro Schritt
-            </label>
+            <label htmlFor="input-runspersamplestep">Durchläufe pro Schritt</label>
           </FloatLabel>
 
           <FloatLabel>
@@ -173,15 +192,11 @@ const MonteCarloSimulationMulti = () => {
             <label htmlFor="input-numgputhreads">Anzahl GPU Threads</label>
           </FloatLabel>
 
-          <Button label="Los" onClick={() => onRun()} />
+          <Button label="Los" onClick={() => onRun()} disabled={!testGPU && !testCPU} />
         </div>
 
         <div className="MonteCarloSimulationMulti__Chart">
-          {isLoading ? (
-            <ProgressBar value={progress} />
-          ) : (
-            <Chart type="line" data={chartData} options={chartOptions} />
-          )}
+          {isLoading ? <ProgressBar value={progress} /> : <Chart type="line" data={chartData} options={chartOptions} />}
         </div>
       </div>
     </div>
